@@ -4,7 +4,6 @@ my_packages = c("shiny",
                 "dplyr",
                 "plotly",
                 "lubridate",
-                "ggplot2",
                 "RPostgreSQL",
                 "sqldf"
                 )

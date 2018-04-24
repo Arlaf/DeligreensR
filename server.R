@@ -4,7 +4,6 @@ library(shinyjs)
 library(dplyr)
 library(plotly)
 library(lubridate)
-library(ggplot2)
 library(RPostgreSQL)
 library(sqldf)
 
