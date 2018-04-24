@@ -13,6 +13,6 @@ install_if_missing = function(p) {
   }
 }
 
-invisble(install.packages("shiny"))
+invisible(install.packages("shiny"))
 
 invisible(sapply(my_packages, install_if_missing))
