@@ -1,5 +1,4 @@
-my_packages = c("shiny", 
-                "shinydashboard",
+my_packages = c("shinydashboard",
                 "shinyjs",
                 "dplyr",
                 "plotly",
@@ -13,5 +12,7 @@ install_if_missing = function(p) {
     install.packages(p)
   }
 }
+
+invisble(install.packages("shiny"))
 
 invisible(sapply(my_packages, install_if_missing))
