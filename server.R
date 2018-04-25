@@ -556,4 +556,11 @@ shinyServer(function(input, output, session) {
     }
   })
   
+  ###### POUR EVITER LA CONNEXION TIME OUT
+  output$keepAlive <- renderText({
+    req(input$count)
+    paste("keep alive ", input$count)
+    paste("","")
+  })
+  
 })
