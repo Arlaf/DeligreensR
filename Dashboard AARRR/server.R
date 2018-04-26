@@ -158,7 +158,7 @@ shinyServer(function(input, output, session) {
   })
   
   reac_filtres <- reactive({
-    print("reac_filtre")
+    print("reac_filtre"),
     df <- import_data()
     
     # Filtre sur les équipiers
@@ -555,12 +555,6 @@ shinyServer(function(input, output, session) {
       )
     }
   })
-  
-  ###### POUR EVITER LA CONNEXION TIME OUT
-  output$keepAlive <- renderText({
-    req(input$count)
-    paste("keep alive ", input$count)
-    paste("","")
-  })
+
   
 })
