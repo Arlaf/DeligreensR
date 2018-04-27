@@ -10,5 +10,10 @@ dashboardPage(
   ################### SIDEBAR ###################
   dashboardSidebar(
     uiOutput("sidebar")
+  ),
+  
+  ################### BODY ###################
+  dashboardBody(
+    uiOutput("body")
   )
 )

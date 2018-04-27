@@ -6,8 +6,11 @@ library(plotly)
 library(lubridate)
 library(RPostgreSQL)
 library(sqldf)
-
-# source("./fonctions.R")
+library(leaflet)
+library(sp)
+library(maptools)
+library(geojsonio)
+library(htmltools)
 
 ###### FONCTIONS #########
 verif_tz <- function(df){
@@ -88,7 +91,59 @@ extract_core <- function(req){
 }
 
 email_equipier <- c('dumontet.thibaut@gmail.com', 'dumontet.julie@gmail.com', 'laura.h.jalbert@gmail.com', 'rehmvincent@gmail.com', 'a.mechkar@gmail.com', 'helena.luber@gmail.com', 'martin.plancquaert@gmail.com', 'badieresoscar@gmail.com', 'steffina.tagoreraj@gmail.com', 'perono.jeremy@gmail.com', 'roger.virgil@gmail.com', 'boutiermorgane@gmail.com', 'idabmat@gmail.com', 'nadinelhubert@gmail.com', 'faure.remi@yahoo.fr', 'maxime.cisilin@gmail.com', 'voto.arthur@gmail.com')
-
+zone1 <- c("69001",
+           "69002",
+           "69003",
+           "69004",
+           "69005",
+           "69006",
+           "69007",
+           "69008",
+           "69009",
+           "69100",
+           "69110",
+           "69350",
+           "69600")
+zone2 <- c("69120",
+           "69130",
+           "69160",
+           "69190",
+           "69200",
+           "69230",
+           "69300",
+           "69310",
+           "69340",
+           "69370",
+           "69410",
+           "69450",
+           "69500",
+           "69660")
+zone3 <- c("69126",
+           "69140",
+           "69150",
+           "69250",
+           "69260",
+           "69270",
+           "69280",
+           "69290",
+           "69320",
+           "69330",
+           "69360",
+           "69390",
+           "69530",
+           "69540",
+           "69570",
+           "69580",
+           "69630",
+           "69650",
+           "69680",
+           "69730",
+           "69740",
+           "69760",
+           "69780",
+           "69800",
+           "69890",
+           "69960")
 
 ###### INITIALISATION ######
 format_date <- "%d %b %y"
@@ -104,9 +159,11 @@ rv$verified <- F
 
 ##### SERVEUR #######
 shinyServer(function(input, output, session) {
-   
+  
+  ################# FONCTIONS ############ 
   session$onSessionEnded(stopApp)
   
+  # Importation des données et premiers calculs
   import_data <- reactive({
     print("import_data")
     req <- "SELECT 	o.id AS order_id,
@@ -121,10 +178,11 @@ shinyServer(function(input, output, session) {
                   	o.total_discounts_cents,
                   	c.created_at AS client_created_at,
                   	c.email,
+                    ci.zip_code,
                   	c.first_order_date,
                   	sum(l.buying_price_cents * l.quantity) AS cogs
-          FROM clients c, orders o, line_items l
-          WHERE o.id = l.order_id and o.client_id = c.id
+          FROM clients c, orders o, line_items l, contact_informations ci
+          WHERE o.id = l.order_id AND o.client_id = c.id AND ci.id = o.contact_information_id
           GROUP BY  o.id,
                     o.order_number,
                     o.client_id,
@@ -137,6 +195,7 @@ shinyServer(function(input, output, session) {
                   	o.total_discounts_cents,
                   	c.created_at,
                   	c.email,
+                    ci.zip_code,
                   	c.first_order_date"
     df <- extract_core(req)
     
@@ -157,8 +216,9 @@ shinyServer(function(input, output, session) {
     df
   })
   
+  # Filtrage des commandes
   reac_filtres <- reactive({
-    print("reac_filtre"),
+    print("reac_filtre")
     df <- import_data()
     
     # Filtre sur les équipiers
@@ -219,15 +279,21 @@ shinyServer(function(input, output, session) {
     sortie
   })
   
+  # Clic sur le bouton valider à la demande de password
   observeEvent(input$go,{
     if(input$pwd == Sys.getenv("login_password")){
       rv$verified <- T
     }
   })
   
+  # A l'identification : activation du dashboard général
+  observeEvent(rv$verified,{
+    isolate({updateTabItems(session, "tabs", "tab_general")})
+  })
+  
   ################## GRAPHIQUES ##################
   
-  ##### Clients #####
+  # Clients
   output$clients <- renderPlotly({
     cli <- reac_filtres()[[2]]
     
@@ -262,7 +328,7 @@ shinyServer(function(input, output, session) {
     g1
   })
   
-  ##### Marge et panier moyen #####
+  # Marge et panier moyen
   output$panier <- renderPlotly({
     df <- reac_filtres()[[1]]
     
@@ -313,7 +379,7 @@ shinyServer(function(input, output, session) {
     g1
   })
   
-  ##### Ventes brutes et nettes #####
+  #Ventes brutes et nettes
   output$ventes <- renderPlotly({
     df <- reac_filtres()[[1]]
     
@@ -362,7 +428,7 @@ shinyServer(function(input, output, session) {
     g1
   })
   
-  ##### Nombre de commandes #####
+  # Nombre de commandes
   output$commandes <- renderPlotly({
     df <- reac_filtres()[[1]]
     
@@ -440,6 +506,11 @@ shinyServer(function(input, output, session) {
   output$sidebar <- renderUI({
     if(rv$verified){
       tagList(
+        sidebarMenu(id = "tabs",
+                    menuItem("Dashboard général", tabName = "tab_general", icon = icon("dashboard")),
+                    menuItem("Codes postaux", icon = icon("globe"), tabName = "tab_geo")
+        ),
+        h1(""),
         dateRangeInput("dates", 
                        label = "Dates",
                        format = "dd/mm/yyyy",
@@ -449,7 +520,7 @@ shinyServer(function(input, output, session) {
                      choices = list("Tous" = "tous", "Livraisons" = "livr", "Pickups" = "pick"),
                      selected = "tous"),
         radioButtons("type_client", label = "Types de clients", 
-                     choices = list("Tous" = "tous", "Nouveau clients" = "new", "Repeat customers" = "repeat"),
+                     choices = list("Tous" = "tous", "Nouveaux clients" = "new", "Repeat customers" = "repeat"),
                      selected = "tous"),
         radioButtons("periode", label = "Regrouper",
                      choices = list("par mois" = "Mois", "par semaine" = "Semaine", "par jour" = "Jour"),
@@ -462,6 +533,7 @@ shinyServer(function(input, output, session) {
   # Body
   output$body <- renderUI({
     if(rv$verified){
+      
       tagList(
         ###### COULEURS STATUTS ######
         
@@ -514,47 +586,231 @@ shinyServer(function(input, output, session) {
                         ")),
         
         ###### CONTENU ######
-        fluidRow(
-          valueBoxOutput("box_ventes", width = 3),
-          valueBoxOutput("box_panier", width = 3),
-          valueBoxOutput("box_clients", width = 3),
-          valueBoxOutput("box_com", width = 3)
-        ),
-        
-        #### UNE BOX PAR GRAPH
-        fluidRow(
-          column(width = 6,
-                 box(title = "Ventes",
-                     solidHeader = T,
-                     status = "primary",
-                     width = 12,
-                     plotlyOutput("ventes", height = "250px")),
-                 box(title = "Marge et panier moyen",
-                     solidHeader = T,
-                     status = "info",
-                     width = 12,
-                     plotlyOutput("panier", height = "250px"))),
-          column(width = 6,
-                 box(title = "Nombre de clients",
-                     solidHeader = T,
-                     status = "warning",
-                     width = 12,
-                     plotlyOutput("clients", height = "250px")),
-                 box(title = "Nombre de commandes",
-                     solidHeader = T,
-                     status = "success",
-                     width = 12,
-                     plotlyOutput("commandes", height = "250px")))
+        tabItems(
+          tabItem(
+            tabName = "tab_general",
+            uiOutput("general")
+          ),
+          tabItem(
+            tabName = "tab_geo",
+            uiOutput("geo")
+          )
         )
-        
       )
     }else{
       tagList(
-        passwordInput("pwd", label = "Password", value =""),
-        actionButton("go", label = "Valider")
+        box(width = 3,
+            passwordInput("pwd", label = "Password", value =""),
+            actionButton("go", label = "Valider")
+        )
       )
     }
   })
+  
+  # Panels
+  output$general <- renderUI({
+    tagList(
+      fluidRow(
+        valueBoxOutput("box_ventes", width = 3),
+        valueBoxOutput("box_panier", width = 3),
+        valueBoxOutput("box_clients", width = 3),
+        valueBoxOutput("box_com", width = 3)
+      ),
+      
+      fluidRow(
+        column(width = 6,
+               box(title = "Ventes",
+                   solidHeader = T,
+                   status = "primary",
+                   width = 12,
+                   plotlyOutput("ventes", height = "250px")),
+               box(title = "Marge et panier moyen",
+                   solidHeader = T,
+                   status = "info",
+                   width = 12,
+                   plotlyOutput("panier", height = "250px"))),
+        column(width = 6,
+               box(title = "Nombre de clients",
+                   solidHeader = T,
+                   status = "warning",
+                   width = 12,
+                   plotlyOutput("clients", height = "250px")),
+               box(title = "Nombre de commandes",
+                   solidHeader = T,
+                   status = "success",
+                   width = 12,
+                   plotlyOutput("commandes", height = "250px")))
+      )
+    )
+    
+  })
+  
+  output$geo <- renderUI({
+    tagList(
+      fluidRow(
+        column(width = 3, h1("")),
+        column(width = 3,
+               # align = "right",
+               sliderInput("opac",
+                           label = "Opacité",
+                           min = 0,
+                           max = 1,
+                           step = 0.1,
+                           value = 1)),
+        column(width = 3,
+               # align = "left",
+               selectInput("choix_var", label = "Mesure à afficher", 
+                           choices = list("Nombre de commandes" = "nb_com",
+                                          "Nombre de clients" = "nb_cli",
+                                          "Chiffre d'affaire TTC" = "ca"), 
+                           selected = "nb_com")),
+        column(width = 3, h1(""))
+        ),
+      tags$style(type = "text/css", "#map {height: calc(100vh - 200px) !important;}"),
+      leafletOutput("map")
+    )
+  })
+  
+  ################## CARTE ##################
+  prep_geo <- reactive({
+    print("prep_geo")
+    df <- reac_filtres()[[1]] 
+    
+    # Comptage du nombre de commandes par codes postaux
+    df_cp <- df %>%
+      filter(!pickup & !is.na(zip_code)) %>%
+      group_by(zip_code) %>%
+      summarise(nb_com = n(),
+                nb_cli = n_distinct(client_id),
+                ca = sum(total_price_cents/100)) %>%
+      ungroup() %>% as.data.frame()
+    
+    # Importation des polygones des communes
+    com <- geojsonio::geojson_read("/home/arnaud/Téléchargements/base-officielle-des-codes-postaux-croisee-avec-geoflar-communes-2013.geojson",
+                                   what = "sp")
+    # On ne garde que les zones qu'on livre
+    com <- com[com$code_postal %in% c(zone1,zone2,zone3),]
+    
+    com$zone <- NA
+    com$zone[com$code_postal %in% zone1] <- 1
+    com$zone[com$code_postal %in% zone2] <- 2
+    com$zone[com$code_postal %in% zone3] <- 3
+    com$zone <- as.factor(com$zone)
+    
+    # Regroupement des polygones des communes par codes postaux
+    cp <- unionSpatialPolygons(com, com$code_postal)
+    
+    # Regroupement des polygones des communes par zones
+    zones <- unionSpatialPolygons(com, com$zone)
+    
+    # Liste complète des CP
+    liste_cp <- names(cp)
+    
+    # Création d'un df qui contient tous les CP sans commandes
+    df_cp2 <- data.frame(zip_code = liste_cp[!(liste_cp %in% df_cp$zip_code)],
+                         nb_com = 0,
+                         nb_cli = 0,
+                         ca = 0)
+    
+    # Fusion des 2 df
+    df_cp <- rbind(df_cp, df_cp2)
+    rm(df_cp2)
+    
+    # Pour permettre la jointure avec le SP des codes postaux
+    # Exactement les mêmes CP dans le df et le sp
+    df_cp <- df_cp %>%
+      filter(zip_code %in% liste_cp)
+    # Noms des ligne = code postal
+    rownames(df_cp) <- df_cp$zip_code
+    
+    # Jointure des polygones et des données
+    cp <- addAttrToGeom(cp, df_cp, match.ID = T)
+    
+    # Ajout de la zone au sp
+    # cp$zone <- NA
+    # cp$zone[cp$zip %in% zone1] <- 1
+    # cp$zone[cp$zip %in% zone2] <- 2
+    # cp$zone[cp$zip %in% zone3] <- 3
+    
+    sortie <- list(com, cp, zones)
+    sortie
+  })
+  
+  output$map <- renderLeaflet({
+    
+    com <- prep_geo()[[1]]
+    cp <- prep_geo()[[2]]
+    zones <- prep_geo()[[3]]
+    
+    if(input$choix_var == "nb_com"){
+      cp$val <- cp$nb_com
+      titre <- "Nombre de commandes"
+      labels <- sprintf("<strong>%s</strong><br/>%g commandes",
+                        cp$zip_code, cp$val) %>%
+        lapply(htmltools::HTML)
+      pal <- colorNumeric("Blues", domain = cp$val)
+    }else if(input$choix_var == "nb_cli"){
+      cp$val <- cp$nb_cli
+      titre <- "Nombre de clients"
+      labels <- sprintf("<strong>%s</strong><br/>%g clients",
+                        cp$zip_code, cp$val) %>%
+        lapply(htmltools::HTML)
+      pal <- colorNumeric("Reds", domain = cp$val)
+    }else{
+      cp$val <- cp$ca
+      titre <- "Chiffre d'affaire TTC"
+      labels <- sprintf("<strong>%s</strong><br/>%s € de CA TTC",
+                        cp$zip_code, format(round(cp$val), big.mark = " ", decimal.mark = ",", scientific = F)) %>%
+        lapply(htmltools::HTML)
+      pal <- colorNumeric("Greens", domain = cp$val)
+    }
+    
+    # Palette de couleurs
+    # bins <- seq(0,50,10)
+    # pal <- colorBin("YlOrRd", domain = cp$nb_com, bins = bins)
 
+    map <- leaflet() %>%
+      # Fond de carte
+      addProviderTiles("Esri.WorldStreetMap") %>%
+      # Polygones des codes postaux
+      addPolygons(data = cp,
+                  fillColor = ~pal(val),
+                  fillOpacity = input$opac,
+                  weight = 1,
+                  color = "white",
+                  label = labels,
+                  highlightOptions = highlightOptions(
+                    color = "red",
+                    opacity = 1,
+                    weight = 2,
+                    bringToFront = TRUE,
+                    sendToBack = TRUE)) %>%
+      # Lignes des communes
+      addPolylines(data = com,
+                   weight = 1,
+                   color = "#EBEBEB") %>%
+      # Lignes des codes postaux (pour les remettre devant les communes)
+      addPolylines(data = cp,
+                   weight = 2,
+                   color = "#C2C2C2") %>%
+      # Lignes des zones
+      addPolylines(data = zones,
+                   weight = 3,
+                   color = "black") %>%
+      # Marqueur de l'entrepot Deligreens
+      addMarkers(lng = 4.813257264638196,
+                 lat = 45.721664672462765,
+                 label = "Deligreens") %>%
+      addLegend(position = "bottomright",
+                pal = pal,
+                values = cp$val,
+                title = titre,
+                labFormat = labelFormat(suffix = if(input$choix_var == "ca"){" €"}else{NULL}),
+                opacity = 1) #%>%
+      # setView(lng = ,
+      #         lat = ,
+      #         zoom = )
+    map
+  })
   
 })
