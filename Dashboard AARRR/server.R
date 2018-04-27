@@ -648,7 +648,7 @@ shinyServer(function(input, output, session) {
   output$geo <- renderUI({
     tagList(
       fluidRow(
-        column(width = 3, h1("")),
+        column(width = 2, h1("")),
         column(width = 3,
                # align = "right",
                sliderInput("opac",
@@ -664,7 +664,10 @@ shinyServer(function(input, output, session) {
                                           "Nombre de clients" = "nb_cli",
                                           "Chiffre d'affaire TTC" = "ca"), 
                            selected = "nb_com")),
-        column(width = 3, h1(""))
+        column(width = 3,
+               radioButtons("echelle", label = "Echelle", 
+                            choices = list("Linéaire" = "lin", "Quadratique" = "quad", "Logarithmique" = "log"),
+                            selected = "lin"))
         ),
       tags$style(type = "text/css", "#map {height: calc(100vh - 200px) !important;}"),
       leafletOutput("map")
@@ -686,7 +689,7 @@ shinyServer(function(input, output, session) {
       ungroup() %>% as.data.frame()
     
     # Importation des polygones des communes
-    com <- geojsonio::geojson_read("/home/arnaud/Téléchargements/base-officielle-des-codes-postaux-croisee-avec-geoflar-communes-2013.geojson",
+    com <- geojsonio::geojson_read("./data_geo.geojson",
                                    what = "sp")
     # On ne garde que les zones qu'on livre
     com <- com[com$code_postal %in% c(zone1,zone2,zone3),]
@@ -748,24 +751,26 @@ shinyServer(function(input, output, session) {
       labels <- sprintf("<strong>%s</strong><br/>%g commandes",
                         cp$zip_code, cp$val) %>%
         lapply(htmltools::HTML)
-      pal <- colorNumeric("Blues", domain = cp$val)
+      couleurs <- "Blues"
+      # pal <- colorBin("Blues", domain = cp$val, bins = 9)
     }else if(input$choix_var == "nb_cli"){
       cp$val <- cp$nb_cli
       titre <- "Nombre de clients"
       labels <- sprintf("<strong>%s</strong><br/>%g clients",
                         cp$zip_code, cp$val) %>%
         lapply(htmltools::HTML)
-      pal <- colorNumeric("Reds", domain = cp$val)
+      couleurs <- "Reds"
     }else{
       cp$val <- cp$ca
       titre <- "Chiffre d'affaire TTC"
       labels <- sprintf("<strong>%s</strong><br/>%s € de CA TTC",
                         cp$zip_code, format(round(cp$val), big.mark = " ", decimal.mark = ",", scientific = F)) %>%
         lapply(htmltools::HTML)
-      pal <- colorNumeric("Greens", domain = cp$val)
+      couleurs <- "Greens"
     }
     
     # Palette de couleurs
+    pal <- colorNumeric(couleurs, domain = if(input$echelle == "lin"){cp$val}else if(input$echelle == "quad"){sqrt(cp$val)}else{log(cp$val+1)})
     # bins <- seq(0,50,10)
     # pal <- colorBin("YlOrRd", domain = cp$nb_com, bins = bins)
 
@@ -774,7 +779,7 @@ shinyServer(function(input, output, session) {
       addProviderTiles("Esri.WorldStreetMap") %>%
       # Polygones des codes postaux
       addPolygons(data = cp,
-                  fillColor = ~pal(val),
+                  fillColor = ~pal(if(input$echelle == "lin"){cp$val}else if(input$echelle == "quad"){sqrt(cp$val)}else{log(cp$val+1)}),
                   fillOpacity = input$opac,
                   weight = 1,
                   color = "white",
@@ -800,16 +805,18 @@ shinyServer(function(input, output, session) {
       # Marqueur de l'entrepot Deligreens
       addMarkers(lng = 4.813257264638196,
                  lat = 45.721664672462765,
-                 label = "Deligreens") %>%
-      addLegend(position = "bottomright",
-                pal = pal,
-                values = cp$val,
-                title = titre,
-                labFormat = labelFormat(suffix = if(input$choix_var == "ca"){" €"}else{NULL}),
-                opacity = 1) #%>%
-      # setView(lng = ,
-      #         lat = ,
-      #         zoom = )
+                 label = "Deligreens") 
+    
+    # Légende seulement si échelle linéaire
+    if(input$echelle == "lin"){
+      map <- map %>%
+        addLegend(position = "bottomright",
+                  pal = pal,
+                  values = cp$val,
+                  title = titre,
+                  labFormat = labelFormat(suffix = if(input$choix_var == "ca"){" €"}else{NULL}),
+                  opacity = 1)
+    }
     map
   })
   
