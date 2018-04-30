@@ -75,7 +75,6 @@ extract_core <- function(req){
           sqldf.RPostgreSQL.dbname = dbname,
           sqldf.RPostgreSQL.host = dbhost, 
           sqldf.RPostgreSQL.port = 5432)
-  rm(pass) # removes the password
   
   df <- sqldf(req)
   
@@ -207,7 +206,12 @@ shinyServer(function(input, output, session) {
              age = as.numeric(difftime(created_at, first_order_date, units = "min")),
              premiere = age < 60,
              equipier = grepl("@deligreens.com$",email) | email %in% email_equipier,
-             marge = total_price_cents - cogs)
+             marge = total_price_cents - cogs,
+             zone = NA)
+    
+    df$zone[df$zip_code %in% zone1] <- 1
+    df$zone[df$zip_code %in% zone2] <- 2
+    df$zone[df$zip_code %in% zone3] <- 3
     
     # Résultats par semaine par défaut
     df$group <- df$semaine
@@ -243,15 +247,15 @@ shinyServer(function(input, output, session) {
     if(input$periode == "Jour"){
       df$group <- df$date
       df$lib <- paste("Le", format(df$group, "%A"), format(df$group, format_date))
-      periode_en_cours <- Sys.Date()
+      # periode_en_cours <- Sys.Date()
     }else if(input$periode == "Semaine"){
       df$group <- df$semaine
       df$lib <- paste("Semaine du", format(df$group, format_date))
-      periode_en_cours <- floor_date(Sys.Date(), unit = "week", week_start = getOption("lubridate.week.start", 1))
+      # periode_en_cours <- floor_date(Sys.Date(), unit = "week", week_start = getOption("lubridate.week.start", 1))
     }else {
       df$group <- df$mois
       df$lib <- format(df$group, "%B")
-      periode_en_cours <- floor_date(Sys.Date(), unit = "month")
+      # periode_en_cours <- floor_date(Sys.Date(), unit = "month")
     }
     
     # Identification des nouveaux clients de la période (group)
@@ -275,7 +279,8 @@ shinyServer(function(input, output, session) {
         filter(nouveau)
     }
     
-    sortie <- list(df, cli, periode_en_cours)
+    # sortie <- list(df, cli, periode_en_cours)
+    sortie <- list(df, cli)
     sortie
   })
   
@@ -438,6 +443,9 @@ shinyServer(function(input, output, session) {
                 nb_liv = sum(!pickup)) %>%
       mutate(nb_pick = nb_tot - nb_liv)
     
+    # Borne supérieure du graphique : si on la laisse par défaut, certains labels du graphique dépassent du graphique (en hauteur)
+    max <- max(com$nb_tot) * 1.1
+    
     g1 <- plot_ly(com, x = ~group, y = ~nb_liv, type = 'bar', name = "Livraisons",
                   marker = list(color = vert),
                   text = ~nb_liv,
@@ -454,12 +462,41 @@ shinyServer(function(input, output, session) {
                 hovertext = ~paste(lib,
                                    '<br>Nb =', nb_pick,
                                    '<br>Pct =', round(nb_pick*100/nb_tot,1),"%")) %>%
-      layout(yaxis = list(title = 'Nombre de commandes'),
+      layout(yaxis = list(title = 'Nombre de commandes',
+                          range = c(0,max)),
              xaxis = list(title = input$periode,
                           tickvals = ~group,
                           ticktext = ~if(input$periode == "Mois"){lib}else{format(group,"%d/%m")}),
              barmode = 'stack')
     
+    g1
+  })
+  
+  # Codes postaux
+  output$code_postaux <- renderPlotly({
+    df <- reac_filtres()[[1]]
+    
+    geo <- df %>%
+      filter(!pickup) %>%
+      group_by(group, zip_code) %>%
+      summarize(nb_com = n(),
+                nb_cli = n_distinct(client_id),
+                nb_new = n_distinct(client_id[nouveau]),
+                nb_old = nb_cli - nb_new,
+                ca = sum(total_price_cents)/100) %>%
+      ungroup()
+    
+    g1 <- plot_ly()
+    
+    for (cp in sort(unique(df$zip_code))){
+      g1 <- add_trace(g1,
+                      data = geo[geo$zip_code == cp,],
+                      x = ~group,
+                      y = ~nb_com,
+                      type = "scatter",
+                      mode = "lines+markers",
+                      name = paste(cp," "))
+    }
     g1
   })
   
@@ -670,7 +707,8 @@ shinyServer(function(input, output, session) {
                             selected = "lin"))
         ),
       tags$style(type = "text/css", "#map {height: calc(100vh - 200px) !important;}"),
-      leafletOutput("map")
+      leafletOutput("map"),
+      plotlyOutput("code_postaux")
     )
   })
   
@@ -748,26 +786,31 @@ shinyServer(function(input, output, session) {
     if(input$choix_var == "nb_com"){
       cp$val <- cp$nb_com
       titre <- "Nombre de commandes"
-      labels <- sprintf("<strong>%s</strong><br/>%g commandes",
-                        cp$zip_code, cp$val) %>%
-        lapply(htmltools::HTML)
+      # labels <- sprintf("<strong>%s</strong><br/>%g commandes",
+      #                   cp$zip_code, cp$val) %>%
+      #   lapply(htmltools::HTML)
       couleurs <- "Blues"
       # pal <- colorBin("Blues", domain = cp$val, bins = 9)
     }else if(input$choix_var == "nb_cli"){
       cp$val <- cp$nb_cli
       titre <- "Nombre de clients"
-      labels <- sprintf("<strong>%s</strong><br/>%g clients",
-                        cp$zip_code, cp$val) %>%
-        lapply(htmltools::HTML)
+      # labels <- sprintf("<strong>%s</strong><br/>%g clients",
+      #                   cp$zip_code, cp$val) %>%
+      #   lapply(htmltools::HTML)
       couleurs <- "Reds"
     }else{
       cp$val <- cp$ca
       titre <- "Chiffre d'affaire TTC"
-      labels <- sprintf("<strong>%s</strong><br/>%s € de CA TTC",
-                        cp$zip_code, format(round(cp$val), big.mark = " ", decimal.mark = ",", scientific = F)) %>%
-        lapply(htmltools::HTML)
+      # labels <- sprintf("<strong>%s</strong><br/>%s € de CA TTC",
+      #                   cp$zip_code, format(round(cp$val), big.mark = " ", decimal.mark = ",", scientific = F)) %>%
+      #   lapply(htmltools::HTML)
       couleurs <- "Greens"
     }
+    
+    # Labels
+    labels <- sprintf("<strong>%s</strong><br/>%g commandes<br/>%g clients<br/>%s € de CA TTC",
+                      cp$zip_code, cp$nb_com, cp$nb_cli, format(round(cp$ca), big.mark = " ", decimal.mark = ",", scientific = F)) %>%
+      lapply(htmltools::HTML)
     
     # Palette de couleurs
     pal <- colorNumeric(couleurs, domain = if(input$echelle == "lin"){cp$val}else if(input$echelle == "quad"){sqrt(cp$val)}else{log(cp$val+1)})
