@@ -11,84 +11,12 @@ library(sp)
 library(maptools)
 library(geojsonio)
 library(htmltools)
+library(reshape2)
 
 ###### FONCTIONS #########
-verif_tz <- function(df){
-  # Si le dataframe passé en paramètre contient des colonnes de POSIXct, la fonction lance la fonction correction_tz sur chacune d'entre elles
-  n <- ncol(df)
-  posix_found <- F
-  i <- 1
-  # Recherche de posix
-  while(!posix_found & i <= n){
-    if(is.POSIXct(df[,i])){
-      posix_found <- T
-    }
-    i <- i + 1
-  }
-  # Correction si il y a des posix
-  if(posix_found){
-    # identification des colonnes de POSIXct
-    cols <- sapply(df, is.POSIXct)
-    # Si il y a plusieurs colonnes de POSIXct
-    if(sum(cols) > 1){
-      # Création d'un dataframe contenant les bonnes dates
-      a <- df[,cols] %>%
-        lapply(correction_tz) %>%
-        as.data.frame()
-      # Collage des dataframe
-      df <- cbind(df[,!cols],a)
-      # Si il n'y a qu'une seule colonne de POSIXct
-    }else{
-      df[,which(cols)] <- correction_tz(df[,which(cols)])
-    }
-    
-  }
-  df
-}
+source(file = "../Fonctions_Core_DB.R")
 
-correction_tz <- function(x){
-  # Lit un vecteur de date en UTC pour les convertir en CET / CEST
-  x <- as.POSIXct(as.character(x),tz = "UTC")
-  attr(x, "tzone") <- "Europe/Paris"
-  x
-}
-
-extract_core <- function(req){
-  
-  dbname <- Sys.getenv("dbname")
-  dbhost <- Sys.getenv("dbhost")
-  dbuser <- Sys.getenv("dbuser")
-  dbpass <- Sys.getenv("dbpass")
-  
-  # loads the PostgreSQL driver
-  drv <- dbDriver("PostgreSQL")
-  # creates a connection to the postgres database
-  # note that "con" will be used later in each connection to the database
-  con <- dbConnect(drv, 
-                   dbname = dbname,
-                   host = dbhost, 
-                   port = 5432,
-                   user = dbuser, 
-                   password = dbpass)
-  options(sqldf.RPostgreSQL.user = dbuser, 
-          sqldf.RPostgreSQL.password = dbpass,
-          sqldf.RPostgreSQL.dbname = dbname,
-          sqldf.RPostgreSQL.host = dbhost, 
-          sqldf.RPostgreSQL.port = 5432)
-  
-  df <- sqldf(req)
-  
-  # close the connection
-  dbDisconnect(con)
-  dbUnloadDriver(drv)
-  
-  # Correction des Time Zones :
-  # Les données sont stockées en UTC mais lues en CET/CEST par R
-  df <- verif_tz(df)
-  
-  df
-}
-
+###### INITIALISATION ######
 email_equipier <- c('dumontet.thibaut@gmail.com', 'dumontet.julie@gmail.com', 'laura.h.jalbert@gmail.com', 'rehmvincent@gmail.com', 'a.mechkar@gmail.com', 'helena.luber@gmail.com', 'martin.plancquaert@gmail.com', 'badieresoscar@gmail.com', 'steffina.tagoreraj@gmail.com', 'perono.jeremy@gmail.com', 'roger.virgil@gmail.com', 'boutiermorgane@gmail.com', 'idabmat@gmail.com', 'nadinelhubert@gmail.com', 'faure.remi@yahoo.fr', 'maxime.cisilin@gmail.com', 'voto.arthur@gmail.com')
 zone1 <- c("69001",
            "69002",
@@ -144,13 +72,18 @@ zone3 <- c("69126",
            "69890",
            "69960")
 
-###### INITIALISATION ######
 format_date <- "%d %b %y"
 
 # Chartre graphique
 rouge <-"#EC7963"
 bleu <- "#584E7C"
 vert <- "#77D7D2"
+
+# Informations de connexion à la DB Core
+dbname <- Sys.getenv("dbname")
+dbhost <- Sys.getenv("dbhost")
+dbuser <- Sys.getenv("dbuser")
+dbpass <- Sys.getenv("dbpass")
 
 rv <- reactiveValues()
 
@@ -196,7 +129,7 @@ shinyServer(function(input, output, session) {
                   	c.email,
                     ci.zip_code,
                   	c.first_order_date"
-    df <- extract_core(req)
+    df <- extract_core(req, dbname, dbhost, dbuser, dbpass)
     
     df <- df %>%
       filter(order_id != 666) %>%
@@ -209,13 +142,16 @@ shinyServer(function(input, output, session) {
              marge = total_price_cents - cogs,
              zone = NA)
     
-    df$zone[df$zip_code %in% zone1] <- 1
-    df$zone[df$zip_code %in% zone2] <- 2
-    df$zone[df$zip_code %in% zone3] <- 3
+    df$zone[df$zip_code %in% zone1] <- "Zone 1"
+    df$zone[df$zip_code %in% zone2] <- "Zone 2"
+    df$zone[df$zip_code %in% zone3] <- "Zone 3"
     
-    # Résultats par semaine par défaut
+    # On groupe par semaine par défaut
     df$group <- df$semaine
     df$lib <- paste("Semaine du", format(df$group, format_date))
+    
+    # On groupe par code postal par défaut
+    df$group_geo <- df$zip_code
     
     df
   })
@@ -244,6 +180,7 @@ shinyServer(function(input, output, session) {
         filter(pickup)
     }
     
+    # Création de la variable pour grouper les données selon les périodes
     if(input$periode == "Jour"){
       df$group <- df$date
       df$lib <- paste("Le", format(df$group, "%A"), format(df$group, format_date))
@@ -256,6 +193,13 @@ shinyServer(function(input, output, session) {
       df$group <- df$mois
       df$lib <- format(df$group, "%B")
       # periode_en_cours <- floor_date(Sys.Date(), unit = "month")
+    }
+    
+    # Création de la variable pour grouper les données selon les zones géographique (CP ou zones)
+    if(input$area =="cp"){
+      df$group_geo <- df$zip_code
+    }else{
+      df$group_geo <- df$zone
     }
     
     # Identification des nouveaux clients de la période (group)
@@ -298,7 +242,7 @@ shinyServer(function(input, output, session) {
   
   ################## GRAPHIQUES ##################
   
-  # Clients
+  # Nb Clients
   output$clients <- renderPlotly({
     cli <- reac_filtres()[[2]]
     
@@ -384,7 +328,7 @@ shinyServer(function(input, output, session) {
     g1
   })
   
-  #Ventes brutes et nettes
+  # Ventes brutes et nettes
   output$ventes <- renderPlotly({
     df <- reac_filtres()[[1]]
     
@@ -478,7 +422,8 @@ shinyServer(function(input, output, session) {
     
     geo <- df %>%
       filter(!pickup) %>%
-      group_by(group, zip_code) %>%
+      # filter(zip_code %in% input$choix_zone) %>%
+      group_by(group, group_geo) %>%
       summarize(nb_com = n(),
                 nb_cli = n_distinct(client_id),
                 nb_new = n_distinct(client_id[nouveau]),
@@ -488,16 +433,24 @@ shinyServer(function(input, output, session) {
     
     g1 <- plot_ly()
     
-    for (cp in sort(unique(df$zip_code))){
+    for (z in sort(unique(df$group_geo))){
       g1 <- add_trace(g1,
-                      data = geo[geo$zip_code == cp,],
+                      data = geo[geo$group_geo == z,],
                       x = ~group,
                       y = ~nb_com,
                       type = "scatter",
                       mode = "lines+markers",
-                      name = paste(cp," "))
+                      name = paste(z," "))
     }
     g1
+  })
+  
+  ################## TABLEAUX ##################
+  output$table_geo <- renderDataTable({
+    df <- reac_filtres()[[1]]
+    
+    tab <-table(df$group_geo, df$group)
+    tab
   })
   
   ################## INFOBOX ##################
@@ -562,6 +515,9 @@ shinyServer(function(input, output, session) {
         radioButtons("periode", label = "Regrouper",
                      choices = list("par mois" = "Mois", "par semaine" = "Semaine", "par jour" = "Jour"),
                      selected = "Semaine"),
+        radioButtons("area", label = "Regrouper",
+                     choices = list("par code postal" = "cp", "par zone" = "zone"),
+                     selected = "cp"),
         checkboxInput("equipier", label = "Enlever les équipiers", value = TRUE)
       )
     }
@@ -708,8 +664,24 @@ shinyServer(function(input, output, session) {
         ),
       tags$style(type = "text/css", "#map {height: calc(100vh - 200px) !important;}"),
       leafletOutput("map"),
-      plotlyOutput("code_postaux")
+      uiOutput("selection_zone"),
+      dataTableOutput("table_geo")
     )
+  })
+  
+  # Input dynamiques
+  output$selection_zone <- renderUI({
+    df <- reac_filtres()[[1]]
+    
+    choices <- df$zip_code %>%
+      unique() %>%
+      sort()
+    
+    selectizeInput("choix_zone",
+                   label = "Sélectionner les zones à afficher",
+                   choices = choices,
+                   selected = c("69001","69002","69003","69004","69005","69006","69007","69008","69009", "69100"),
+                   multiple = T)
   })
   
   ################## CARTE ##################
