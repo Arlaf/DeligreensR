@@ -24,69 +24,26 @@ source(file = "../tax_overrides.R")
 # Récupération de tous les produits actuels de shopify
 prod <- get_products(key, secret) %>%
   rename(price_shopify = price) %>%
+  # Ajout du taux de taxe par produit
   mutate(tax_rate = get_taxes(key, secret, shopify_id, tax_overrides))
 
 ####### Collections Shopify #######
-# Valeurs brutes : identifiants et noms des collections
-{
-  # Collections "de vente"
-  title <- c("Fruits & Légumes",
-             "Crèmerie",
-             "Viandes",
-             "Poissonnerie",
-             "Traiteur",
-             "Boulangerie / Pâtisserie",
-             "Epicerie Sucrée",
-             "Epicerie Salée",
-             "Boissons",
-             "Cave",
-             "Hygiène et Entretien",
-             "Fleurs",
-             "Bébés & Enfants")
-  
-  handle <- c("fruits-legumes",
-              "produits-laitiers",
-              "viandes",
-              "poissonnerie",
-              "traiteur",
-              "patisserie-boulangerie",
-              "epicerie-sucree",
-              "epicerie-salee",
-              "boissons",
-              "cave",
-              "hygiene-et-entretien",
-              "fleurs",
-              "bebes-enfants")
-  
-  collection_id <- c(399234954,
-                     399241162,
-                     28828333,
-                     399239882,
-                     13046186013,
-                     399236298,
-                     435241226,
-                     435243530,
-                     417670538,
-                     416960842,
-                     448607754,
-                     33088274521,
-                     448511946)
-
-}
+# Importation du dataframe navbar qui contient les id des collections de la navbar du shop ainsi que leur nom et handle
+source(file = "../navbar_collections.R")
 
 # Collection ventes
   # Tous les produits de la première collection dans un dataframe
-  col_ventes <- data.frame(col_id = collection_id[1],
-                    col_title = title[1],
-                    col_handle = handle[1],
-                    shopify_id = get_collection(key, secret, collection_id[1]))
+  col_ventes <- data.frame(col_id = navbar$id[1],
+                           col_title = navbar$title[1],
+                           col_handle = navbar$handle[1],
+                           shopify_id = get_collection(key, secret, navbar$id[1]))
   
   # Ajout des produits des autres collections
-  for(i in 2:length(collection_id)){
-    tmp <- data.frame(col_id = collection_id[i],
-                      col_title = title[i],
-                      col_handle = handle[i],
-                      shopify_id = get_collection(key, secret, collection_id[i]))
+  for(i in 2:nrow(navbar)){
+    tmp <- data.frame(col_id = navbar$id[i],
+                      col_title = navbar$title[i],
+                      col_handle = navbar$handle[i],
+                      shopify_id = get_collection(key, secret, navbar$id[i]))
     col_ventes <- rbind(col_ventes, tmp)
   }
   
@@ -137,9 +94,7 @@ df <- df %>%
          margin_rate = round(100*margin/selling_price_ht, 1)) %>%
   # Ordre des colonnes
   select(shopify_id,
-         product_id,
          product_title,
-         product_handle,
          published,
          vendor,
          buying_price_ht,
@@ -151,7 +106,10 @@ df <- df %>%
          product_type,
          col_title,
          col_handle,
-         col_id) %>%
+         col_id,
+         product_id,
+         variant_id,
+         product_handle) %>%
   rename(product_id_shopify = shopify_id,
          product_id_core = product_id,
          collection_title = col_title,
