@@ -24,7 +24,7 @@ source(file = "../tax_overrides.R")
 # Récupération de tous les produits actuels de shopify
 prod <- get_products(key, secret) %>%
   rename(price_shopify = price) %>%
-  mutate(tax_rate = get_taxes(key, secret, shopify_id, df_overrides))
+  mutate(tax_rate = get_taxes(key, secret, shopify_id, tax_overrides))
 
 ####### Collections Shopify #######
 # Valeurs brutes : identifiants et noms des collections
