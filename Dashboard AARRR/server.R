@@ -719,15 +719,18 @@ shinyServer(function(input, output, session) {
     # Liste complète des CP
     liste_cp <- names(cp)
     
-    # Création d'un df qui contient tous les CP sans commandes
-    df_cp2 <- data.frame(zip_code = liste_cp[!(liste_cp %in% df_cp$zip_code)],
-                         nb_com = 0,
-                         nb_cli = 0,
-                         ca = 0)
-    
-    # Fusion des 2 df
-    df_cp <- rbind(df_cp, df_cp2)
-    rm(df_cp2)
+    # S'il existe des zip_code sans livraisons
+    if(length(liste_cp[!(liste_cp %in% df_cp$zip_code)]) > 0){
+      # Création d'un df qui contient tous les CP sans commandes
+      df_cp2 <- data.frame(zip_code = liste_cp[!(liste_cp %in% df_cp$zip_code)],
+                           nb_com = 0,
+                           nb_cli = 0,
+                           ca = 0)
+      print("prep_geo5")
+      # Fusion des 2 df
+      df_cp <- rbind(df_cp, df_cp2)
+      rm(df_cp2)
+    }
     
     # Pour permettre la jointure avec le SP des codes postaux
     # Exactement les mêmes CP dans le df et le sp
