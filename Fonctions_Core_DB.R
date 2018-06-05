@@ -1,6 +1,7 @@
 library(RPostgreSQL)
 library(sqldf)
 library(lubridate)
+library(dplyr)
 
 func_checked <- function(x){
   # Position des "true" dans la chaine x

@@ -1,0 +1,124 @@
+---
+title: "LifeTime Value"
+author: "Arnaud Lafont"
+date: "4 juin 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(dplyr)
+
+source("../Fonctions_Core_DB.R")
+source("~/Documents/Linfo_core.R")
+
+# Informations de connexion à la DB Core
+dbname <- Sys.getenv("dbname")
+dbhost <- Sys.getenv("dbhost")
+dbuser <- Sys.getenv("dbuser")
+dbpass <- Sys.getenv("dbpass")
+
+# Liste des équipiers
+email_equipier <- c('dumontet.thibaut@gmail.com', 'dumontet.julie@gmail.com', 'laura.h.jalbert@gmail.com', 'rehmvincent@gmail.com', 'a.mechkar@gmail.com', 'helena.luber@gmail.com', 'martin.plancquaert@gmail.com', 'badieresoscar@gmail.com', 'steffina.tagoreraj@gmail.com', 'perono.jeremy@gmail.com', 'roger.virgil@gmail.com', 'boutiermorgane@gmail.com', 'idabmat@gmail.com', 'nadinelhubert@gmail.com', 'faure.remi@yahoo.fr', 'maxime.cisilin@gmail.com', 'voto.arthur@gmail.com')
+
+# Récupération de la table clients
+req <- "SELECT 	c.id AS client_id,
+                c.email,
+              	c.shopify_id,
+              	c.orders_count,
+              	c.created_at AS client_created_at,
+              	c.first_order_date
+        FROM clients c"
+cli <- extract_core(req, dbname, dbhost, dbuser, dbpass) %>%
+  # On enlève les équipiers puis la colonne email qui n'est plus utile
+  filter(!(grepl("@deligreens.com$",email) | email %in% email_equipier)) %>%
+  select(- email)
+
+# Récupération de la table orders
+req <- "SELECT  o.order_number,
+              	o.client_id,
+              	o.created_at AS order_created_at,
+              	o.total_price_cents AS total_price,
+              	SUM(CEILING(li.quantity * li.selling_price_cents/(1+tax_rate))) AS gross_sale,
+              	o.pickup,
+              	o.discount_code
+  FROM orders o, line_items li
+  WHERE o.id = li.order_id
+  GROUP BY  o.order_number,
+          	o.client_id,
+          	o.created_at,
+          	o.total_price_cents,
+          	o.pickup,
+          	o.discount_code
+  ORDER BY client_id, order_created_at"
+com <- extract_core(req, dbname, dbhost, dbuser, dbpass)%>%
+  # On ne garde que les commandes des clients qui ne sont pas des équipiers
+  filter(client_id %in% cli$client_id)
+
+######### Au bout de combien de temps peut-on considérer qu'un client n'est plus client ? #########
+
+# On rajoute client_created_at, fisrt_order_date et order_count au DF des commandes
+com <- cli %>%
+  select(client_id, client_created_at, first_order_date, orders_count) %>%
+  left_join(com, ., by = "client_id")
+
+com <- com %>%
+  # calcul du délai entre une commande et la précédente d'un client
+  mutate(delai = ifelse(client_id == lag(client_id), round(difftime(order_created_at, lag(order_created_at), units = "days")), NA)) %>%
+  # nieme = la commande est la combientième du client
+  group_by(client_id) %>%
+  mutate(nieme = row_number() + orders_count - max(row_number())) %>%
+  # derniere : la commande est-elle la dernière du client
+  mutate(derniere = ifelse(nieme == max(nieme), T, F)) %>%
+  ungroup() %>%
+  # pas_revu_depuis : Combien de temps s'est-il écoulé depuis que le client n'a pas commandé
+  mutate(pas_revu_depuis = ifelse(derniere, round(difftime(Sys.Date(),order_created_at, units="days")),NA)) %>%
+  # Conversion des centimes en €
+  mutate(total_price = total_price/100,
+         gross_sale = gross_sale/100)
+
+```
+
+
+### A partir de combien de temps peut-on considérer qu'un client est perdu ?
+
+```{r}
+# Création d'un dataframe : une ligne est un délai entre 2 commandes successives d'un client (revenu = TRUE) ou entre sa derniere commande et aujourd'hui (revenu = FALSE)
+df <- data.frame(duree = com$delai[!is.na(com$delai)],
+                 revenu = T)
+df <- bind_rows(df, data.frame(duree = com$pas_revu_depuis[!is.na(com$pas_revu_depuis)],
+                               revenu = F))
+```
+
+#### Quantiles des delais entre deux commandes
+
+```{r quantiles}
+quantile(com$delai, probs = seq(0.9,1,0.005), na.rm = T)
+```
+
+90% des délais entre deux commandes d'un clients sont inférieurs à `r quantile(com$delai, probs = seq(0.9,1,0.005), na.rm = T)["90%"]` jours.
+95% des délais entre deux commandes d'un clients sont inférieurs à `r quantile(com$delai, probs = seq(0.9,1,0.005), na.rm = T)["95%"]` jours.
+99% des délais entre deux commandes d'un clients sont inférieurs à `r quantile(com$delai, probs = seq(0.9,1,0.005), na.rm = T)["99%"]` jours.
+
+#### Combien de clients reviennent après ces délais ?
+
+
+```{r graph}
+# fonction : Quand ça fait X jours que les clients n'ont pas commandé, combien sont revenus ?
+revenu.apres <- function(df,x){
+  return(round(100*sum(df$revenu[df$duree > x])/nrow(df[df$duree > x,]),1))
+}
+
+x <- 50:max(com$delai, na.rm = T)
+y <- sapply(x, revenu.apres, df = df)
+ggplot(mapping = aes(x = x, y = y)) +
+  geom_point() +
+  geom_vline(xintercept=quantile(com$delai, probs = seq(0.9,1,0.005), na.rm = T)["90%"]) +
+  geom_vline(xintercept=quantile(com$delai, probs = seq(0.9,1,0.005), na.rm = T)["95%"]) +
+  geom_vline(xintercept=quantile(com$delai, probs = seq(0.9,1,0.005), na.rm = T)["99%"]) +
+  theme_bw()
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
