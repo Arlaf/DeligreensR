@@ -252,7 +252,7 @@ shinyServer(function(input, output, session) {
       summarise(nb_cli = n(),
                 nb_nouv = sum(nouveau, na.rm = T)) %>%
       mutate(nb_anc = nb_cli - nb_nouv)
-
+    
     g1 <- plot_ly(cli, x = ~group, y = ~nb_anc, type = 'bar', name = "Repeat",
                   marker = list(color = vert),
                   text = ~nb_anc,
@@ -328,7 +328,7 @@ shinyServer(function(input, output, session) {
     g1
   })
   
-  # Ventes brutes et nettes
+  # CA et marge
   output$ventes <- renderPlotly({
     df <- reac_filtres()[[1]]
     
@@ -345,20 +345,20 @@ shinyServer(function(input, output, session) {
                   y = ~brute,
                   marker = list(color = bleu),
                   line = list(color = bleu),
-                  name = "Ventes brutes",
+                  name = "CA",
                   type = "scatter",
                   mode = "lines+markers",
                   hoverinfo = "text",
                   hovertext = ~paste(lib,
-                                     '<br>Ventes brutes =', paste(format(round(brute,2), big.mark=" ", decimal.mark=","),"€"))) %>%
+                                     '<br>CA =', paste(format(round(brute,2), big.mark=" ", decimal.mark=","),"€"))) %>%
       add_trace(y = ~nette,
                 marker = list(color = rouge),
                 line = list(color = rouge),
-                name = "Ventes nettes",
+                name = "Marge commerciale",
                 mode = "lines+markers",
                 hoverinfo = "text",
                 hovertext = ~paste(lib,
-                                   '<br>Ventes nettes =', paste(format(round(nette,2), big.mark=" ", decimal.mark=","),"€"),
+                                   '<br>Marge commerciale =', paste(format(round(nette,2), big.mark=" ", decimal.mark=","),"€"),
                                    '<br>Pct =', paste(round(100*nette/brute,1),"%"))) %>%
       add_trace(y = ~discounts,
                 marker = list(color = vert),
@@ -477,7 +477,7 @@ shinyServer(function(input, output, session) {
     df <- reac_filtres()[[1]]
     val <- round(sum(df$total_price_cents/100),0)
     valueBox(value = paste(format(val, big.mark = " ", scientific = F), "€"),
-             subtitle = tags$p(style = "font-size: 16px;", "Ventes brutes"),
+             subtitle = tags$p(style = "font-size: 16px;", "Ventes totales"),
              icon = icon("eur"),
              color = "aqua")
   })

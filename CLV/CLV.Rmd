@@ -1,9 +1,10 @@
 ---
-title: "CLV"
-author: "Arnaud Lafont"
+title: "Deligreens Customer Lifetime Value"
+# author: "Arnaud Lafont"
 date: "5 juin 2018"
-runtime: shiny
-output: html_document
+output:
+  html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -11,8 +12,10 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 
 library(ggplot2)
-library(dplyr)
+library(plyr) # Ne pas changer l'ordre de chargement, c'est plyr puis dplyr
+library(dplyr) # Ne pas changer l'ordre de chargement, c'est plyr puis dplyr
 library(BTYD)
+
 
 source("../Fonctions_Core_DB.R")
 source("~/Documents/Linfo_core.R")
@@ -23,8 +26,13 @@ dbhost <- Sys.getenv("dbhost")
 dbuser <- Sys.getenv("dbuser")
 dbpass <- Sys.getenv("dbpass")
 
+# Chartre graphique
+rouge <-"#EC7963"
+bleu <- "#584E7C"
+vert <- "#77D7D2"
+
 # Liste des équipiers
-email_equipier <- c('dumontet.thibaut@gmail.com', 'dumontet.julie@gmail.com', 'laura.h.jalbert@gmail.com', 'rehmvincent@gmail.com', 'a.mechkar@gmail.com', 'helena.luber@gmail.com', 'martin.plancquaert@gmail.com', 'badieresoscar@gmail.com', 'steffina.tagoreraj@gmail.com', 'perono.jeremy@gmail.com', 'roger.virgil@gmail.com', 'boutiermorgane@gmail.com', 'idabmat@gmail.com', 'nadinelhubert@gmail.com', 'faure.remi@yahoo.fr', 'maxime.cisilin@gmail.com', 'voto.arthur@gmail.com')
+email_equipier <- c('dumontet.thibaut@gmail.com', 'dumontet.julie@gmail.com', 'laura.h.jalbert@gmail.com', 'rehmvincent@gmail.com', 'a.mechkar@gmail.com', 'helena.luber@gmail.com', 'martin.plancquaert@gmail.com', 'badieresoscar@gmail.com', 'steffina.tagoreraj@gmail.com', 'perono.jeremy@gmail.com', 'roger.virgil@gmail.com', 'boutiermorgane@gmail.com', 'idabmat@gmail.com', 'nadinelhubert@gmail.com', 'faure.remi@yahoo.fr', 'maxime.cisilin@gmail.com', 'voto.arthur@gmail.com', 'pedro7569@gmail.com')
 
 # Récupération des commandes
 req <- "SELECT  o.order_number,
@@ -35,6 +43,8 @@ req <- "SELECT  o.order_number,
               	o.created_at AS order_created_at,
               	o.total_price_cents AS total_price,
               	SUM(CEILING(li.quantity * li.selling_price_cents/(1+tax_rate))) AS gross_sale,
+                o.total_shipping_cents/1.2 AS shipping_ht,
+                o.financial_status,
               	o.pickup,
               	o.discount_code,
                 c.first_order_date
@@ -47,33 +57,57 @@ req <- "SELECT  o.order_number,
             c.orders_count,
           	o.created_at,
           	o.total_price_cents,
+            o.total_shipping_cents/1.2,
+            o.financial_status,
           	o.pickup,
           	o.discount_code,
             c.first_order_date
   ORDER BY  order_created_at"
-com <- extract_core(req, dbname, dbhost, dbuser, dbpass)
+commandes <- extract_core(req, dbname, dbhost, dbuser, dbpass)
 
 # Corrections manuelles :
-# Si un client a été créé après le 30 avril 2017 et qu'il n'a pas de date de premiere commande on la trouve
-com <- com %>%
+# Client_id avec des first_order_date erronées
+commandes$first_order_date[commandes$client_id == 4050] <- as.POSIXct("2018-06-03 00:00:01")
+# Montants erronés
+commandes$total_price[commandes$order_number == 7574] = commandes$gross_sale[commandes$order_number == 7574] = 12732
+commandes <- commandes %>%
+  # On retire le client 2495 qui ne commande que des cartes cadeaux
+  filter(client_id != 2495) %>%
   group_by(client_id) %>%
+  # Si un client a été créé après le 30 avril 2017 et qu'il n'a pas de date de premiere commande on la trouve
   mutate(first_order_date = as.POSIXct(ifelse(is.na(first_order_date) & client_created_at > as.Date("2017-04-30"), min(order_created_at),first_order_date), origin = "1970-01-01")) %>%
   ungroup() %>%
-  # On retire les commandes avec des gross_sale = 0 € car se sont soit des annulations soit des erreurs dans la BD
+  # On retire les commandes avec des ventes = 0 € car se sont soit des annulations soit des erreurs dans la BD
   filter(gross_sale > 0)
-# Client_id 2893 : sa first_order_date est erronée
-com$first_order_date[com$client_id == 2893] <- as.POSIXct("2018-02-21 00:00:01")
+
+# Mise en forme
+commandes <- commandes %>%
+  # La date du jour nous suffit, pas besoin de l'heure
+  mutate(client_created_at = as.Date(client_created_at),
+         order_created_at = as.Date(order_created_at),
+         first_order_date = as.Date(first_order_date)) %>%
+  # Conversion des centimes en euros
+  mutate(gross_sale = gross_sale/100,
+         total_price = total_price/100,
+         shipping_ht = shipping_ht/100)
+
+# Si un client a passé 2 commandes le même jour, on les regroupe
+commandes <- commandes %>%
+  group_by(client_id, email, orders_count, client_created_at, first_order_date, order_created_at) %>%
+  summarise(total_price = sum(total_price),
+            gross_sale = sum(gross_sale),
+            shipping_ht = sum(shipping_ht))
 
 # Création de colonnes
-com <- com %>%
-  arrange(client_id, order_created_at) %>%
+commandes <- commandes %>%
+  arrange(client_id, desc(order_created_at)) %>%
   # calcul du délai entre une commande et la précédente d'un client
-  mutate(delai = ifelse(client_id == lag(client_id), round(difftime(order_created_at, lag(order_created_at), units = "days")), NA))%>%
+  mutate(delai = ifelse(client_id == lag(client_id), round(difftime(lag(order_created_at), order_created_at, units = "days")), NA))%>%
   # nieme = la commande est la combientième du client
   group_by(client_id) %>%
-  mutate(nieme = row_number() + orders_count - max(row_number())) %>%
+  # mutate(nieme = row_number() + orders_count - max(row_number())) %>%
   # derniere : la commande est-elle la dernière du client
-  mutate(derniere = ifelse(nieme == orders_count, T, F)) %>%
+  mutate(derniere = order_created_at == max(order_created_at)) %>%
   ungroup() %>%
   # pas_revu_depuis : Combien de temps s'est-il écoulé depuis que le client n'a pas commandé
   mutate(pas_revu_depuis = ifelse(derniere, round(difftime(now(),order_created_at, units="days")),NA)) %>%
@@ -82,60 +116,254 @@ com <- com %>%
          mois = floor_date(order_created_at, unit = "month")) %>%
   # Ajout de le cohorte et de l'age lors de la commande
   mutate(cohorte = floor_date(first_order_date, unit = "month"),
-         age = round(as.numeric(difftime(order_created_at, cohorte, units = "days"))/30))
-
-# Mise en forme
-com <- com %>%
-  # La date du jour nous suffit, pas besoin de l'heure
-  mutate(client_created_at = as.Date(client_created_at),
-         order_created_at = as.Date(order_created_at)) %>%
-  # Conversion des centimes en euros
-  mutate(gross_sale = gross_sale/100,
-         total_price = total_price/100)
+         age_jour = as.numeric(difftime(order_created_at, first_order_date, units = "days")),
+         age = floor(age_jour/30)) %>%
+  # Ajout des frais de livraison dans les ventes totales
+  mutate(gross_sale = gross_sale + shipping_ht) %>%
+  select(-shipping_ht)
   
-
 # Filtres
-com <- com %>%
+commandes <- commandes %>%
   # On ne garde que les commandes des clients qui ne sont pas des équipiers
-  filter(!(email %in% email_equipier) & !(grepl("@deligreens.com$",email))) # %>%
-  
+  filter(!(email %in% email_equipier) & !(grepl("@deligreens.com$",email))) %>%
+  # On ne garde que les données postérieures au 1er mai 2017
+  filter(order_created_at >= as.Date("2017-05-01"))  
 ```
 
-### Exploration des données
+### Customer Value sur 6 mois
 
-Nous nous intéressons à toutes les commandes passées depuis le 1er mai 2017 et jusqu'à `r now()` (moment où ce script a été exécuté).
+```{r, echo=FALSE}
+# Echantillon de clients : première commande passée entre DEBUT et FIN
+debut <- as.Date("2017-09-01")
+fin <- as.Date("2017-10-31")
 
-```{r}
+# durée d'observation (en jours)
+duree <- 180
+```
+
+Pour cadrer cette étude on va se baser sur les clients qui ont passé leurs premières commandes entre le `r debut` et le `r fin`<br>
+Chaque client va être étudié sur les 6 mois qui suivent sa première commande afin d'avoir une période d'observation égale.
+
+```{r echantillonage, echo=FALSE}
+com <- commandes %>%
+  # On ne garde que les clients qui ont passé leur première commande dans la periode choisie
+  filter(first_order_date >= debut & first_order_date <= fin) %>%
+  # On ne garde que les commandes qu'ils ont passé dans la durée choisie
+  filter(age_jour < duree)
+
+nb_com <- nrow(com)
+```
+
+```{r rang de la commande, echo=FALSE}
+com <- com %>%
+  # Calcul du rang de la commande
+  arrange(client_id, order_created_at) %>%
+  group_by(client_id) %>%
+  mutate(nieme = row_number()) %>%
+  ungroup()
+
+nb_cli <- n_distinct(com$client_id)
+```
+
+Nous avons donc `r nb_cli` clients qui ont passé `r nb_com` en `r duree` jours.
+
+```{r gross_sales, echo=FALSE}
+gross_sales_tot <- sum(com$gross_sale)
+gross_sales_cli <- gross_sales_tot/nb_cli
+```
+
+Cela représente `r format(gross_sales_tot, big.mark = " ", scientific = F)` € de vente brute HT, soit une moyenne de `r round(gross_sales_cli,2)` € par client.
+
+```{r repurchase rate, echo=FALSE}
+df <- com %>%
+  filter(nieme == 2) %>%
+  group_by(client_id) %>%
+  summarise(reorder_age = min(age_jour)) %>%
+  ungroup() %>%
+  mutate(inf_30 = reorder_age <= 30,
+         inf_60 = reorder_age <= 60,
+         inf_90 = reorder_age <= 90,
+         inf_180 = reorder_age <= 180) %>%
+  summarise(inf_30 = sum(inf_30)/nb_cli,
+            inf_60 = sum(inf_60)/nb_cli,
+            inf_90 = sum(inf_90)/nb_cli,
+            inf_180 = sum(inf_180)/nb_cli)
+
+df <- data.frame(x = colnames(df),
+                 y = as.numeric(df[1,])) %>%
+  mutate(x = factor(x, levels = c("inf_30", "inf_60", "inf_90", "inf_180")))
+
+labels <- paste(round(100*df$y,1),"%")
+
+ggplot(data = df, aes(x = x)) +
+  geom_bar(stat = "identity", aes(y = y), fill = rouge) +
+  geom_text(aes(y = y, label = labels), vjust = 1.5, color = "white") +
+  geom_hline(yintercept = 0) +
+  theme_classic() +
+  scale_y_continuous(breaks = seq(0,1,0.2), labels = paste(100*seq(0,1,0.2),"%"), limits = c(0,1)) +
+  scale_x_discrete(labels = c("à 30 jours", "à 60 jours", "à 90 jours", "à 180 jours")) +
+  labs(title = "Repurchase rate", x = NULL, y = "Pourcentage des clients qui repassent commande") +
+  theme(panel.grid.major.y = element_line(color = "gray", size = 0.1),
+        panel.grid.minor.y = element_line(color = "gray", size = 0.1, linetype = "dashed"),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+```
+
+`r labels[4]` des `r nb_cli` clients ont repassé une (ou plusieurs) commande dans les 180 jours qui ont suivis leurs premières commandes.
+
+```{r graph rétention clients, echo=FALSE}
 df <- com %>%
   group_by(age) %>%
-  summarise(panier_moyen = mean(gross_sale))
+  summarise(nb_cli = n_distinct(client_id),
+            moy_com = n()/nb_cli,
+            ventes_moy = sum(gross_sale/nb_cli)) %>%
+  ungroup()
 
-ggplot(data = df) +
-  geom_point(aes(x = age, y = panier_moyen)) +
-  # scale_y_continuous(breaks = seq(0,1,0.1)) +
-  # scale_x_continuous(breaks = seq(0, max(com$delai, na.rm = T), 20)) +
-  ggtitle("Evolution des paniers moyens au fil de la vie des clients") +
-  xlab("Age du client (en mois)") +
-  ylab("Panier moyen (gross sales)") +
-  geom_vline(xintercept = 0) +
+facteur <- 1
+
+lm <- lm(ventes_moy~age, data = df)
+
+ggplot(data = df, aes(x = age)) +
   geom_hline(yintercept = 0) +
-  theme_bw() 
-# plot(df$age, df$panier_moyen)
+  geom_bar(aes(y = nb_cli), stat = "identity", fill = rouge) +
+  geom_text(aes(y = nb_cli, label = nb_cli), color = "white", vjust = 1.5) +
+  # geom_point(aes(y = ventes_moy), color = vert) +
+  # geom_abline(intercept = lm$coefficients[1]*facteur, slope = lm$coefficients[2]*facteur, color = vert) +
+  scale_x_continuous(breaks = df$age, name = "Ancienneté des clients en mois") +
+  scale_y_continuous(breaks = seq(0,500,50), name = "Nombre de clients") +
+  scale_color_manual(values = rouge) +
+  labs(shape = NULL, colour = NULL, title = "Rétention clients", subtitle = "") +
+  theme_classic() +
+  theme(panel.grid.major.y = element_line(color = "gray", size = 0.1),
+        panel.grid.minor.y = element_line(color = "gray", size = 0.1, linetype = "dashed"),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
 ```
 
-```{r}
+Rétention des client sur 6 mois : 
+`r df$nb_cli[df$age == 5]`/`r df$nb_cli[df$age == 0]` = `r round(100*df$nb_cli[df$age == 5]/df$nb_cli[df$age == 0],1)` %
+
+```{r graph retention commandes, echo=FALSE}
+df <- com %>%
+  group_by(age) %>%
+  summarise(nb_com = n(),
+            panier_moyen = mean(gross_sale)) %>%
+  ungroup()
+
+# droite de regression
+lm <- lm(panier_moyen~age, data = df)
+
+# facteur pour le 2ème axe
+facteur <- 5
+
+ggplot(data = df, aes(x = age)) +
+  geom_hline(yintercept = 0) +
+  geom_bar(aes(y = nb_com, color = "Nb commandes"), stat = "identity", fill = bleu) +
+  geom_text(aes(y = nb_com, label = nb_com), color = "white", vjust = 1.5) +
+  geom_point(aes(y = panier_moyen*facteur, shape = "Panier moyen"), color = vert) +
+  geom_abline(intercept = lm$coefficients[1]*facteur, slope = lm$coefficients[2]*facteur, color = vert) +
+  scale_x_continuous(breaks = df$age, name = "Ancienneté des clients en mois") +
+  scale_y_continuous(breaks = seq(0,500,50), name = "Nombre de commandes",
+                     sec.axis =  sec_axis(trans = ~./facteur, name = "Panier moyen", breaks = seq(0,500,50)/facteur, labels = paste(seq(0,500,50)/facteur,"€"))) +
+  scale_color_manual(values = bleu) +
+  labs(shape = NULL, colour = NULL, title = "Evolution du nombre de commandes et du panier moyen") +
+  theme_classic() +
+  theme(panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_line(color = "gray", size = 0.1),
+        panel.grid.minor.y = element_line(color = "gray", size = 0.1, linetype = "dashed"),
+        plot.title = element_text(hjust = 0.5),
+        legend.position = "top")
+```
+
+Après une chute inévitable du nombre de commandes sur les premiers mois, on peut voir qu'il se stabilise dès le 3ème mois.
+Il est aussi intéressant de noter que le panier moyen des commandes (i.e. les ventes brutes) augmente au fil du temps, passant de `r round(df$panier_moyen[df$age == 0],2)`€ à `r round(df$panier_moyen[df$age == 5],2)`€ sur 6 mois.
+
+Rétention en terme de commandes :
+`r df$nb_com[df$age == 5]` / `r df$nb_com[df$age == 0]` = `r round(100*df$nb_com[df$age == 5]/df$nb_com[df$age == 0],1)`%
+
+
+```{r graph retention ventes, echo=FALSE}
+df <- com %>%
+  group_by(age) %>%
+  summarise(ca = sum(gross_sale))
+
+ggplot(df) +
+  geom_bar(stat = "identity", aes(x = age, y = ca), fill = vert) +
+  geom_text(aes(x = age, y = ca, label = paste(format(round(ca), big.mark =" "),"€")), vjust = 1.4, color = "white") +
+  scale_x_continuous(breaks = df$age, name = "Ancienneté des clients en mois") +
+  scale_y_continuous(name = "Ventes brutes") +
+  labs(title = "Evolution des ventes brutes") +
+  theme_classic() +
+  theme(panel.grid.major.y = element_line(color = "gray", size = 0.1),
+        panel.grid.minor.y = element_line(color = "gray", size = 0.1, linetype = "dashed"),
+        panel.grid.minor.x = element_blank(),
+        plot.title = element_text(hjust = 0.5))
+```
+
+Rétention en terme de ventes :
+`r format(round(df$ca[df$age == 5]), scientific = F, big.mark = " ")` / `r format(round(df$ca[df$age == 0]), scientific = F, big.mark = " ")` = `r round(100*df$ca[df$age == 5]/df$ca[df$age == 0],1)` %
+
+### Détection des départs
+
+Lorsque la relation commerciale n'est pas contractuelle, il est difficile de savoir quand un client est parti ou bien si on va le voir revenir. Pour aller plus loin dans la Customer Lifetime Value (CLV), il faut que nous établissions une méthode de détection des départs clients.
+
+Intuitivement on peut dire que ce phénomène dépend au moins de deux facteurs :\n
+- la durée depuis laquelle le client n'a pas passé de commande\n
+- le nombre de commandes du client, l'idée ici est que les clients régulier vont moins vite nous quitter que les clients occasionnels
+
+Etudions ces facteurs pour tenter de trouver un moyen de savoir si un client peut encore être considéré comme actif ou non.
+
+```{r, echo=FALSE}
+# Echantillon de clients : première commande passée entre DEBUT et FIN
+debut <- as.Date("2017-07-01")
+fin <- as.Date("2018-03-31")
+```
+
+Dans cette partie il est moins important d'observer tous les clients pendant la même durée que dans la partie précédente. Tant que ces durées d'observation ne sont pas trop courtes elles n'ont pas à être égales.
+Nous allons donc nous baser sur tous les clients qui ont passé leur première commande entre le `r debut` et le `r fin`, et nous les observerons jusqu'à aujourd'hui.
+
+```{r, echo=FALSE}
+breaks_class_cli <- c(1, 2, 6, Inf)
+labels_class_cli <- c("1ère", "2-5ème", "6+")
+
+comm <- commandes %>%
+  filter(first_order_date >= debut & first_order_date <= fin) %>%
+  arrange(client_id, order_created_at) %>%
+  group_by(client_id) %>%
+  mutate(nieme = row_number(),
+         nieme_class = cut(nieme, 
+                           breaks = breaks_class_cli,
+                           labels = labels_class_cli,
+                           right = F,
+                           include.lowest = T)) %>%
+  ungroup()
+```
+
+Cela nous donne un échantillon de `r n_distinct(comm$client_id)` clients qu'on a observé pendant une période de minimum 3 mois.
+
+Répartition des délais entre 2 commandes
+
+```{r echo=FALSE}
 # Délai entre 2 commandes
-q <- quantile(com$delai, probs = c(0.5,seq(0.9,1,0.005)), na.rm = T)
+q <- quantile(comm$delai[!comm$derniere], probs = seq(0,1,0.1), na.rm = T)
 print(q)
 ```
 
-```{r}
-ggplot(mapping = aes(na.omit(com$delai))) +
+
+```{r, echo=FALSE}
+seuil <- 90
+```
+
+
+```{r echo=FALSE}
+pct <- round(100 * sum(comm$delai[!comm$derniere] <= seuil)/sum(!comm$derniere), 1)
+
+ggplot(mapping = aes(na.omit(comm$delai))) +
   stat_ecdf(geom = "step") +
-  geom_vline(xintercept = q["99%"], color = "red", size = 0.5) +
-  geom_text(aes(x = q["99%"], y = 0.99, label = paste("99 % des délais sont\n inférieurs à",round(q["99%"]), "jours")), color = "red", hjust = -0.02, vjust = 1.1) +
+  geom_vline(xintercept = seuil, color = "red", size = 0.5) +
+  geom_text(aes(x = seuil, y = pct/100, label = paste(pct, "% des délais sont\ninférieurs à", seuil, "jours")), color = "red", hjust = -0.02, vjust = 1.1) +
   scale_y_continuous(breaks = seq(0,1,0.1)) +
-  scale_x_continuous(breaks = seq(0, max(com$delai, na.rm = T), 20)) +
+  scale_x_continuous(breaks = seq(0, max(comm$delai, na.rm = T), 20)) +
   ggtitle("Courbe de répartition des délais entre 2 commandes") +
   xlab("X = Délai en jours") +
   ylab("Pourcentage de délais inférieurs à X") +
@@ -144,368 +372,394 @@ ggplot(mapping = aes(na.omit(com$delai))) +
   theme_bw()
 ```
 
-```{r}
-# fonction : Quand ça fait X jours que les clients n'ont pas commandé, combien sont revenus ?
-revenu.apres <- function(df,x){
-  return(round(sum(df$revenu[df$duree > x])/nrow(df[df$duree > x,]),3))
-}
-
-# Fonction : crée d'un dataframe où une ligne est un délai entre 2 commandes successives d'un client (revenu = TRUE) ou entre sa derniere commande et aujourd'hui (revenu = FALSE)
-func_df_delai <- function(com){
-  df <- data_frame(duree = com$delai[!is.na(com$delai)],
-                   revenu = T)
-  df <- bind_rows(df, data_frame(duree = com$pas_revu_depuis[!is.na(com$pas_revu_depuis)],
-                                 revenu = F))
+```{r echo=FALSE}
+# Fonction : crée un dataframe où une ligne est un délai entre 2 commandes successives d'un client (revenu = TRUE) ou entre sa derniere commande et aujourd'hui (revenu = FALSE)
+func_df_delai<- function(com){
+  df <- com %>%
+    filter(!is.na(delai)) %>%
+    select(delai, nieme, nieme_class) %>%
+    mutate(revenu = T) %>%
+    rename(duree = delai)
+  temp <- com %>%
+    filter(!is.na(pas_revu_depuis)) %>%
+    select(pas_revu_depuis, nieme, nieme_class) %>%
+    mutate(revenu = F) %>%
+    rename(duree = pas_revu_depuis)
+  df <- bind_rows(df, temp)
   return(df)
 }
 
-# Fonction : donne les coordonnées du graph qui montre les chances de revoir un client selon le temps qu'on l'a pas vu
-coord_proba_retour <- function(df){
-  x <- 0:max(df$duree[df$revenu])
-  y <- sapply(x, revenu.apres, df = df)
-  coord <- data.frame(x = x, y = y)
-  return(coord)
+# fonction : Quand ça fait X jours que les clients n'ont pas commandé, combien sont revenus ?
+revenu.apres <- function(df_delai,x){
+  # nombre de retour après un délai > x
+  nb_rev <- sum(df_delai$duree[df_delai$revenu] > x)
+  nb_tot <- sum(df_delai$duree > x)
+  return(round(nb_rev/nb_tot,3))
 }
 
-df <- func_df_delai(com)
-coord <- coord_proba_retour(df)
+df <- func_df_delai(comm)
 
-pct <- coord$y[coord$x == round(q["99%"])]
-jours <- round(q["99%"])
-label1 <- c(paste(pct*100, "%"),
-          paste(jours, "jours"))
-xlabel1 <- c(-13,
-           q["99%"])
-ylabel1 <- c(pct,
-           -0.009)
-label2 <- paste0("Seuls ", pct*100, " % des clients qui ont atteint\n", jours, " jours sans commander\nont fini par repasser une commande")
-xlabel2 <- jours
-ylabel2 <- pct
+# Coordonnées du graph qui montre les chances de revoir un client selon le temps qu'on l'a pas vu
+x <- 0:max(df$duree[df$revenu])
+y <- sapply(x, revenu.apres, df = df)
+coord <- data.frame(x = x, y = y)
+
+# valeur associée au seuil défini
+val <- coord$y[coord$x == seuil]
+
+lab1 <- list(x = seuil,
+             y = 0,
+             text = paste(seuil, "jours"))
+
+lab2 <- list(x = 0,
+             y = val,
+             text = paste(round(100*val,1), "%"))
+
+lab3 <- list(x = seuil,
+             y = val,
+             text = paste("Après une absence de", seuil, "jours\nseuls", round(100*val,1), "% des clients finissent par revenir"))
 
 ggplot() +
   geom_point(data = coord[coord$x >= 15,], aes(x = x, y = y), size = 0.7) +
   geom_vline(xintercept = 0) +
   geom_hline(yintercept = 0) +
-  geom_text(mapping = aes(x = xlabel1, y = ylabel1, label = label1), color = "red") +
-  geom_text(mapping = aes(x = xlabel2, y = ylabel2, label = label2), color = "red", vjust = 0, hjust = 0) +
-  geom_segment(aes(x = q["99%"], xend = q["99%"], y = 0, yend = coord$y[coord$x == round(q["99%"])]), linetype = "dashed", colour = "red") +
-  geom_segment(aes(x = 0, xend = q["99%"], y = coord$y[coord$x == round(q["99%"])], yend = coord$y[coord$x == round(q["99%"])]), linetype = "dashed", colour = "red") +
+  geom_text(mapping = aes(x = lab1$x, y = lab1$y, label = lab1$text), color = "red", vjust = -0.2, hjust = 1.05) +
+  geom_text(mapping = aes(x = lab2$x, y = lab2$y, label = lab2$text), color = "red", vjust = 1.2, hjust = -0.05) +
+  geom_text(mapping = aes(x = lab3$x, y = lab3$y, label = lab3$text), color = "red", vjust = -0.2, hjust = -0.01) +
+  # segment vertical
+  geom_segment(aes(x = seuil, xend = seuil, y = 0, yend = val), linetype = "dashed", colour = "red") +
+  # segment horizontal
+  geom_segment(aes(x = 0, xend = seuil, y = val, yend = val), linetype = "dashed", colour = "red") +
   scale_y_continuous(breaks = seq(0,1,0.05)) +
-  scale_x_continuous(breaks = seq(0, max(com$delai, na.rm = T), 20)) +
-  ggtitle("La probabilité qu'un client passe une nouvelle commande selon la date de sa dernière commande") +
+  scale_x_continuous(breaks = seq(0, max(comm$delai, na.rm = T), 20)) +
+  ggtitle("Probabilité qu'un client passe une nouvelle commande\nselon la date de sa dernière commande") +
   xlab("Nombre de jours sans commande") +
   ylab("Pourcentage des clients qui ont passé une commande après X jours") +
   theme_bw()
 ```
 
-```{r}
-seuil <- 60
+Détaillons ces résultats en prenant en compte le nombre de commandes passées.
+
+```{r, echo=FALSE}
+df <- comm %>%
+  filter(derniere) %>%
+  group_by(nieme_class) %>%
+  summarise(nb = n()) %>%
+  ungroup()
+
+ggplot(df) +
+  geom_bar(stat = "identity", aes(x = nieme_class, y = nb, fill = nieme_class)) +
+  geom_text(aes(x = nieme_class, y = nb, label = nb), color = "white", vjust = 1.4) +
+  geom_hline(yintercept = 0) +
+  scale_fill_manual(values = c(rouge, bleu, vert)) +
+  theme_bw() +
+  labs(title = "Nombre de clients dans chaque catégorie aujourd'hui",
+       fill =  "Rang de la\ncommande\nprécédente",
+       x = "Nombre de commandes actuel des clients",
+       y = "Nombre de clients")
+  
 ```
 
-Après combien de commandes les clients partent-ils ?
-```{r}
-depart <- na.omit(com$orders_count[com$pas_revu_depuis >= seuil])
+```{r, echo=FALSE}
+df <- func_df_delai(comm)
 
-ggplot(mapping = aes(depart)) +
-  stat_ecdf(geom = "step") +
-  stat_ecdf(geom = "point") +
-  scale_y_continuous(breaks = seq(0,1,0.05)) +
-  scale_x_continuous(breaks = seq(0, max(depart), 2)) +
-  xlab("X = Nombre de commandes passées") +
-  ylab("Pourcentage des clients qui sont partis avant leur X+1 ème commande") +
-  labs(title = "Répartition des départs des clients selon leur nombre de commandes") +
-  theme_bw()
-```
-
-Parmi les clients qui ont passé X commandes, combien sont encore actifs ? (combien ont passé une commande dans les `r seuil` derniers jours)
-```{r}
-df <- com %>%
-  # On ne garde que la dernière commande de chaque client
-  filter(!is.na(pas_revu_depuis)) %>%
-  # Si elle a été passée il y a plus de 60 jours on considère qu'il n'est plus actif
-  mutate(actif = pas_revu_depuis < seuil)
-
-# Fonction : parmi les clients qui ont passé au moins X commandes, combien sont toujours actifs ?
-toujours_actif <- function(df, x){
-  nb_cli <- sum(df$orders_count >= x)
-  nb_cli_actif <- sum(df$actif[df$orders_count >=x])
-  return(nb_cli_actif / nb_cli)
+coord <- data.frame()
+for (i in levels(df$nieme_class)){
+  y <- sapply(x, revenu.apres, df = df[df$nieme_class == i,])
+  temp <- data.frame(x = x, y = y, nieme_class = i)
+  coord <- bind_rows(coord, temp)
 }
+coord$nieme_class <- factor(coord$nieme_class, levels = levels(df$nieme_class))
 
-x <- 1:max(com$orders_count)
-y <- sapply(x, toujours_actif, df = df)
+xmin <- 5
+chances <- 0.3
+
+ggplot(data = coord[x >= 10,]) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = chances, linetype = "dashed", size = 0.3, color = "red") +
+  geom_line(aes(x = x, y = y, color = nieme_class), size = 0.5) +
+  scale_color_manual(values = c(rouge, bleu, vert)) +
+  scale_y_continuous(breaks = seq(0,1,0.1), labels =  paste(100*seq(0,1,0.1),"%")) +
+  scale_x_continuous(breaks = seq(0, 180, 10),limits = c(10,180)) +
+  theme_bw() +
+  labs(color = "Rang de la\ncommande\nprécédente",
+       title = "Probabilité de revoir un client qui n'a pas commandé depuis X jours\nselon son nombre de commandes passées",
+       x = "X = Nombre de jours sans commande",
+       y = "Probabilité que le client revienne")
+```
+
+Ce graphique se lit de la façon suivante :<br>
+La courbe rouge représente les clients aprés leurs premières commandes. Elle montre quel pourcentage de clients sont revenus après avoir laissé passer X jours. On peut donc voir que parmi les clients qui n'ont pas repassé commande dans les 30 jours après leurs premières, seulement 30% ont finalement passé une seconde commande.<br>
+
+Ce graphique montre bien que plus les clients sont fidèles, plus on peut laisser passer de temps avant de les considérer comme partis.<br>
+
+On peut donc définir des seuils pour considérer que les clients sont partis selon le nombre de leur commandes. Au risque 20% cela donne les seuils suivants :<br>
+45 jours pour les clients n'ayant passé qu'une commande.<br>
+90 jours pour les clients ayant passé entre 2 et 5 commandes.<br>
+120 jours pour les clients ayant dépassé 5 commandes.<br>
+
+```{r, echo=FALSE}
+seuil1 <- 30
+seuil2 <- 50
+seuil3 <- 90
+
+# ggplot(data = comm[!comm$derniere,], aes(x = delai)) +
+#   stat_ecdf(geom = "step") +
+#   geom_vline(data = ddply(comm[!comm$derniere,], "nieme_class", summarise, med = median(delai)), aes(xintercept = med), color = rouge) +
+#   geom_text(data = ddply(comm[!comm$derniere,], "nieme_class", summarise, med = median(delai)), aes(x = med, y = 0, label = paste(round(med),"jours")), color = rouge, hjust = 0, vjust = 0) +
+#   facet_grid(nieme_class ~ .) +
+#   xlim(0,100) +
+#   theme_bw() +
+#   labs(title = "Répartition des délais entre les commandes",
+#        subtitle = "Les délais entre les commandes sont plus courts au fil des commandes")
 
 ggplot() +
-  geom_point(aes(x = x, y = y)) +
-  geom_line(aes(x = x, y = y)) +
-  scale_y_continuous(breaks = seq(0,1,0.05)) +
-  scale_x_continuous(breaks = seq(0, max(x), 5)) +
-  xlab("X = Nombre de commandes passées") +
-  ylab("Pourcentage des clients toujours actifs") +
-  labs(title = "Activité des clients selon leurs nombres de commandes") +
-  theme_bw()
-```
-
-On peut voir que 72,5% des clients qui ont franchi le seuil de 5 commandes sont encore actifs aujourd'hui.
-
-
-<!-- Parmi les clients qui ont passé X commandes, combien en ont passé une X+1 ème ? -->
-<!-- ```{r} -->
-<!-- # Cette fonction renvoit le pourcentage de clients qui ont commandé une X+1 ème fois parmi ceux qui ont commandé X fois (sachant qu'on considère qu'un client n'a pas commandé sa X+1 ème commande s'il a laissé passer 60 jours) -->
-<!-- pct_x_x1 <- function(com, x){ -->
-<!--   com <- com %>% -->
-<!--     filter(!(orders_count == x & pas_revu_depuis < seuil)) -->
-<!--   return(sum(com$orders_count > x) / sum(com$orders_count >= x)) -->
-<!-- } -->
-
-<!-- x <- 1:(max(com$orders_count)-1) -->
-<!-- xx1 <- sapply(x, pct_x_x1, com = com[!is.na(com$pas_revu_depuis),]) -->
-
-<!-- ggplot() + -->
-<!--   geom_point(aes(x = x, y = xx1)) + -->
-<!--   scale_y_continuous(breaks = seq(0,1,0.05)) + -->
-<!--   scale_x_continuous(breaks = seq(0, max(x), 2)) + -->
-<!--   xlab("X = Nombre de commandes passées") + -->
-<!--   ylab("Pourcentage des clients qui sont partis avant leur X+1 ème commande") + -->
-<!--   labs(title = "Répartition des départs des clients selon leur nombre de commandes", -->
-<!--        subtitle = "") + -->
-<!--   theme_bw() -->
-<!-- ``` -->
-
-### Customer Lifetime Value historique
-
-Dans cette partie, pour cadre l'étude on va se baser sur les clients qui ont passé leur première commande dans la seconde moitié de 2017.
-Cela nous permet d'étudier le comportement des clients sur une durée correcte, et de ne pas inclure des clients fraichement inscrits qui biaiseraient les résultats. Evidement, nous ne nous limitons pas aux commandes passéesdans cette période, nous prenons en compte toutes les commandes que les clients ont passée (à l'exception du mois en cours).
-
-```{r}
-# Calcul de la durée de vie (en mois) de chaque client
-cli <- com %>%
-  filter(first_order_date >= as.Date("2017-07-01") & first_order_date <= as.Date("2017-12-31")) %>%
-  select(client_id, first_order_date, order_created_at, gross_sale) %>%
-  group_by(client_id) %>%
-  summarise(premiere = floor_date(first(first_order_date), unit = "month"),
-            pas_vu_depuis = as.numeric(difftime(Sys.Date(), floor_date(max(order_created_at), unit = "day"), units = "days")),
-            actif = pas_vu_depuis < seuil,
-            derniere = floor_date(max(order_created_at), unit = "month"),
-            total = sum(gross_sale),
-            nb_com = n()) %>%
-  mutate(ddv = round(as.numeric(difftime(derniere, premiere, units = "days"))/30) + 1,
-         moy_mois = round(total/ddv, 2))
-
-nb_cli <- nrow(cli)
-```
-
-`r nb_cli` clients ont effectué leurs premières commandes entre le 1er juillet et le 31 décembre 2017.
-
-#### Durée de vie des clients
-
-Sur les deux graphiques précédents nous pouvons voir que 92% des commandes sont passées moins de `r seuil` jours après la précédente, et qu'après `r seuil` jours sans commandes, nous n'avons que 25% de chances de revoir le client.
-
-Utilisons ce seuil de `r seuil` jours pour déterminer quels sont les clients toujours actifs parmi les `r nb_cli` clients de notre échantillon.
-
-```{r}
-nb_actifs <- cli %>%
-  filter(actif) %>%
-  nrow()
-
-cli %>%
-  group_by(actif) %>%
-  summarise(nb_clients = n(),
-            pct = round(100*n()/nrow(df),1),
-            ddv_moy = round(mean(ddv),1),
-            nb_com_moy = round(mean(nb_com),1),
-            valeur_cli_moy = round(mean(total),2))
-```
-
-A ce stade nous avons de l'information sur la durée de vie des clients que nous avons perdus.
-Par contre le cas des `r nb_actifs` clients actifs est plus compliqué car on ne sait pas encore combien de temps leur relation commerciale avec Deligreens va continuer.
-
-```{r}
-data <- cli$ddv[cli$actif]
-
-# coord <- func_df_delai(com[com$orders_count >= 5,])
-
-ggplot(mapping = aes(data)) +
-  stat_ecdf(geom = "step") +
-  # geom_line(aes(x = seq(0:max(data)), y = coord$y[coord$x <= max(data)]))+
-  # geom_point(aes(x = seq(0:max(data)), y = coord$y[coord$x <= max(data)]))+
-  # geom_vline(xintercept = q["99%"], color = "red", size = 0.5) +
-  # geom_text(aes(x = q["99%"], y = 0.99, label = paste("99 % des délais sont\n inférieurs à",round(q["99%"]), "jours")), color = "red", hjust = -0.02, vjust = 1.1) +
-  scale_y_continuous(breaks = seq(0,1,0.1)) +
-  scale_x_continuous(breaks = seq(0, max(data))) +
-  ggtitle("Répartition des durées de vie actuelles des clients actifs") +
-  xlab("X = Durée de vie actuelle (en mois)") +
-  ylab("Pourcentage") +
-  geom_vline(xintercept = 0) +
   geom_hline(yintercept = 0) +
-  theme_bw()
+  geom_vline(xintercept = 0) +
+  geom_vline(xintercept = seuil1, color = rouge) +
+  geom_vline(xintercept = seuil2, color = bleu) +
+  geom_vline(xintercept = seuil3, color = vert) +
+  stat_ecdf(data = comm[!comm$derniere,], aes(x = delai, color = nieme_class)) +
+  scale_color_manual(values = c(rouge, bleu, vert)) +
+  scale_x_continuous(breaks = seq(0,130,10), limits = c(0,130)) +
+  scale_y_continuous(breaks = seq(0,1,0.1), labels = paste(100*seq(0,1,0.1),"%")) +
+  theme_bw() +
+  labs(color = "Rang de la\ncommande\nprécédente",
+       title = "Répartition des délais entre les commandes",
+       x = "X = Délai en jours avant la prochaine commande",
+       y = "Pourcentage des commande passées\ndans un délai inférieures à X")
+```
+
+On voit bien que la grande majorité des commandes sont passées dans des délais inférieurs au seuils qu'on a définis :<br>
+85% des secondes commandes sont passées moins de 45 jours après la première.<br>
+96% des commandes n°3 à 6 sont passées moins de 90 jours après la précédente.<br>
+Presque 100% des commandes n°7+ sont passées moins<br>
+
+Servons-nous de ces seuils pour identifier les clients actifs et calculer la durée de vie des clients.
+
+```{r creation du df clients, include=FALSE}
+cli <- comm %>%
+  select(client_id, first_order_date, order_created_at, gross_sale, nieme, nieme_class) %>%
+  arrange(client_id, order_created_at) %>%
+  group_by(client_id) %>%
+  summarise(premiere = min(order_created_at),
+            derniere = max(order_created_at),
+            duree = as.numeric(difftime(derniere, premiere, units = "days")),
+            total = sum(gross_sale),
+            nb_com = n(),
+            cat = last(nieme_class),
+            freq = nb_com/(as.numeric(duree)/30),
+            pas_vu_depuis = as.numeric(difftime(as.Date(now()), derniere, units = "days")),
+            actif = pas_vu_depuis <= ifelse(cat == "1ère", seuil1, ifelse(cat == "2-5ème", seuil2, seuil3)))
+
+df <- cli %>%
+  filter(nb_com > 1 & !actif)
+
+# moy <- mean(df$duree)
+# n <- nrow(df)
+# 
+# df <- df %>%
+#   mutate(x = row_number(),
+#          y = dexp(x, rate = 1/moy))
+# 
+# ggplot(df, aes(x=duree)) +
+#   geom_bar(aes(y = (..count..)/sum(..count..)), binwidth = 1) +
+#   geom_line(aes(x = x, y = y))
 ```
 
 
+### Classification des clients
 
-<!-- ### BG/NBD -->
+```{r, echo=FALSE}
+aujourdhui <- as.Date("2018-06-25")
+```
 
-<!-- #### Préparation des données -->
 
-<!-- ```{r} -->
-<!-- beg <- as.Date("2017-05-01") -->
-<!-- int <- as.Date("2018-02-20") -->
-<!-- end <- as.Date("2018-05-31") -->
+On prend tous nos client au 25 juin 2018 (jour de l'étude).
 
-<!-- nb.sem.cal <- (1 + as.numeric(int - beg))/7 -->
-<!-- nb.sem.holdout <- as.numeric(end - int)/7 -->
-<!-- nb.sem.tot <- nb.sem.cal + nb.sem.holdout -->
-<!-- ``` -->
+```{r, include=FALSE}
+allcli <- commandes %>%
+  filter(order_created_at <= aujourdhui) %>%
+  arrange(client_id, order_created_at) %>% 
+  group_by(client_id) %>%
+  summarise(orders_count = first(orders_count),
+            age_client = round(as.numeric(difftime(aujourdhui, first(first_order_date), units = "days"))),
+            ddv = round(as.numeric(difftime(max(order_created_at), first(first_order_date), units = "days"))),
+            panier_moyen = mean(gross_sale),
+            # total = sum(gross_sale),
+            delai_moyen = mean(delai, na.rm = T),
+            delai_moyen_alt = ddv/orders_count,
+            pas_vu_depuis = round(as.numeric(difftime(aujourdhui, max(order_created_at), units= "days"))),
+            cat = cut(orders_count, 
+                           breaks = breaks_class_cli,
+                           labels = labels_class_cli,
+                           right = F,
+                           include.lowest = T),
+            actif = as.integer(pas_vu_depuis <= ifelse(cat == "1ère", seuil1, ifelse(cat == "2-5ème", seuil2, seuil3))))
+# rownames(allcli) <- allcli$client_id
+# allcli <- allcli %>%
+#   select(-client_id)
+```
 
-<!-- ```{r prep} -->
-<!-- # Création de l'event log -->
-<!-- elog <- com %>% -->
-<!--   filter(first_order_date >= beg & first_order_date <= int) %>% -->
-<!--   select(client_id, order_created_at, gross_sale) %>% -->
-<!--   filter(order_created_at >= beg & order_created_at <= end) %>% -->
-<!--   rename(cust = client_id, -->
-<!--          date = order_created_at, -->
-<!--          sales = gross_sale) -->
-
-<!-- # # On regroupe les commandes d'un client s'il en a passé plusieurs dans la même journée -->
-<!-- # elog <- dc.MergeTransactionsOnSameDate(elog) -->
+<!-- # ```{r} -->
+<!-- # library("FactoMineR") -->
+<!-- # library("factoextra") -->
+<!-- # library("corrplot") -->
 <!-- #  -->
-<!-- # # On sépare notre plage de date en 2 parties : Calibration & Holdout -->
-<!-- # end.of.cal.period <- int -->
-<!-- # elog.cal <- elog %>% -->
-<!-- #   filter(date <= end.of.cal.period) -->
+<!-- # # ACP -->
+<!-- # res.pca <- PCA(allcli[,-6], graph = FALSE) -->
 <!-- #  -->
-<!-- # # Création de l'event log filtré : sans les clients qui n'ont commandé qu'une fois dans la période -->
-<!-- # split.data <- dc.SplitUpElogForRepeatTrans(elog.cal) -->
-<!-- # clean.elog <- split.data$repeat.trans.elog -->
+<!-- # # Nombre d'axes -->
+<!-- # fviz_eig(res.pca, addlabels = TRUE, ylim = c(0, 50)) -->
 <!-- #  -->
-<!-- # # Création de la matrice CustomerBytime FILTREE : les clients en ligne, les dates en colonne et les dépenses en valeurs -->
-<!-- # # spend.cbt <- dc.CreateSpendCBT(clean.elog) -->
-<!-- # freq.cbt <- dc.CreateFreqCBT(clean.elog) -->
+<!-- # # VARIABLES -->
+<!-- # var <- get_pca_var(res.pca) -->
 <!-- #  -->
-<!-- # # Création de la matrive CustomerBytime NON FILTREE -->
-<!-- # tot.cbt <- dc.CreateSpendCBT(elog) -->
+<!-- # # Cercle de corrélation -->
+<!-- # fviz_pca_var(res.pca, col.var = "black") -->
 <!-- #  -->
-<!-- # # Merge des 2 matrices -->
-<!-- # cal.cbt <- dc.MergeCustomers(tot.cbt, spend.cbt) -->
+<!-- # # Représentation -->
+<!-- # corrplot(var$cos2, is.corr=FALSE) -->
 <!-- #  -->
-<!-- # # Création de la matrice CustomerBySufficientStatistic -->
-<!-- # birth.periods <- split.data$cust.data$birth.per -->
-<!-- # last.dates <- split.data$cust.data$last.date -->
-<!-- # cal.cbs.dates <- data.frame(birth.periods, last.dates, end.of.cal.period) -->
-<!-- # cal.cbs <- dc.BuildCBSFromCBTAndDates(cal.cbt, cal.cbs.dates, per = "week") -->
-
-<!-- # Paramétrée correctement, la fonction dc.ElogToCbsCbt permet de faire toute cette préparation de données, et même plus. -->
-<!-- res <- dc.ElogToCbsCbt(elog, per = "week", T.cal = int, statistic = "total.spend") -->
-<!-- cal.cbs <- res$cal$cbs -->
-<!-- # hol.cbs <- res$holdout$cbs -->
-<!-- ``` -->
-
-<!-- ```{r parametres_pop} -->
-<!-- # Première estimation des paramètres relatif à la population -->
-<!-- params <- bgnbd.EstimateParameters(cal.cbs) -->
-<!-- LL <- bgnbd.cbs.LL(params, cal.cbs) -->
-
-<!-- # Optimisation -->
-<!-- p.matrix <- c(params, LL) -->
-<!-- for(i in 1:2){ -->
-<!--   params <- bgnbd.EstimateParameters(cal.cbs, params) -->
-<!--   LL <- bgnbd.cbs.LL(params, cal.cbs) -->
-<!--   p.matrix.row <- c(params, LL) -->
-<!--   p.matrix <- rbind(p.matrix, p.matrix.row) -->
-<!-- } -->
-<!-- colnames(p.matrix) <- c("r", "alpha", "a", "b", "LL") -->
-<!-- rownames(p.matrix) <- 1:3 -->
-<!-- ``` -->
-
-<!-- ```{r transaction_rate} -->
-<!-- # Distribution des Transaction Rate -->
-<!-- bgnbd.PlotTransactionRateHeterogeneity(params) -->
-<!-- ``` -->
-
-<!-- ```{r dropout_rate} -->
-<!-- # Distribution des Dropout Rate -->
-<!-- bgnbd.PlotDropoutRateHeterogeneity(params) -->
-<!-- ``` -->
-
-<!-- ```{r estimations_indiv} -->
-<!-- # Estimations individuelles -->
-
-<!-- # Estimation du nombre de commandes d'un client MOYEN en t semaines (semaines car c'est le choix fait plus haut) -->
-<!-- # Cette estimation est presque linéaire -->
-<!-- bgnbd.Expectation(params, t=5) -->
-
-<!-- # Estimation du nombre de commandes qu'un client SPECIFIQUE passera dans les T.star semaines après la fin de la période de calibration -->
-<!-- # client <- "3068" -->
-<!-- # cal.cbs[client,] -->
-<!-- # bgnbd.ConditionalExpectedTransactions(params, T.star = 52, x = cal.cbs[client,"x"], t.x = cal.cbs[client,"t.x"], T.cal = cal.cbs[client,"T.cal"]) -->
+<!-- # # Contribution -->
+<!-- # corrplot(var$contrib, is.corr=FALSE) -->
 <!-- #  -->
-<!-- # # Probabilité qu'un client SPECIFIQUE soit toujours "vivant" à la fin de la période de calibration -->
-<!-- # bgnbd.PAlive(params, x = cal.cbs[client,"x"], t.x = cal.cbs[client,"t.x"], T.cal = cal.cbs[client,"T.cal"]) -->
-<!-- ``` -->
+<!-- # # INDIVIDUS -->
+<!-- # ind <- get_pca_ind(res.pca) -->
+<!-- #  -->
+<!-- # fviz_pca_ind (res.pca, label = "none") -->
+<!-- #  -->
+<!-- # fviz_pca_ind(res.pca, -->
+<!-- #              geom.ind = "point", # Montre les points seulement (mais pas le "text") -->
+<!-- #              col.ind = allcli$cat, # colorer by groups -->
+<!-- #              palette = c(rouge, bleu, vert), -->
+<!-- #              # addEllipses = TRUE, # Ellipses de concentration -->
+<!-- #              legend.title = "Groups" -->
+<!-- #              ) -->
+<!-- # ``` -->
 
-<!-- ```{r clients_vs_commandes, eval=FALSE, include=FALSE} -->
-<!-- # Nombre de client par nombre de commandes, prédictions vs réalité dans la période de calibrage -->
-<!-- # Le 3ème paramètre est le nombre de commande à partir duquel les résultats sont agrégés -->
-<!-- bgnbd.PlotFrequencyInCalibration(params, cal.cbs, 8) -->
-<!-- ``` -->
+```{r, include=FALSE}
+# L'ACP et la classification ont été faites avec SPAD
+classif <- read.csv2(file = "/home/arnaud/Dropbox/Deligreens/classes.csv", sep = ",") %>%
+  mutate(Identificateur = as.character(Identificateur),
+         client_id = as.integer(substring(Identificateur, 2, nchar(Identificateur)-1))) %>%
+  rename(axe1 = Axe.1, axe2 = Axe.2) %>%
+  select(client_id, axe1, axe2) %>%
+  # Création des classes créées par SPAD
+  mutate(classe = ifelse(axe1 < 0 & axe2 > -2.5, "Classe 1",
+                         ifelse(axe1 > 0 & axe2 > -1.9, "Classe 3",
+                                ifelse(axe1 > 2 & axe2 < -1.9, "Classe 4", "Classe 2"))))
 
-<!-- ```{r preparation_evaluation} -->
-<!-- # Evaluation -->
+allcli <- classif %>%
+  select(client_id, classe) %>%
+  left_join(allcli, by = "client_id")
 
-<!-- # Préparation des données de la période de test (holdout) -->
-<!-- elog <- dc.SplitUpElogForRepeatTrans(elog)$repeat.trans.elog -->
+# Correction d'une erreur introduite par la différence entre les arrondis lors de la détermination du statut actif ou non des clients
+correction <- c(1948,2018,2070,2136,2143,2635,2767,2874,2882,3020,3378)
+allcli <- allcli %>%
+  mutate(actif = ifelse(client_id %in% correction, 0, actif))
 
-<!-- x.star <- rep(0, nrow(cal.cbs)) -->
-<!-- cal.cbs <- cbind(cal.cbs, x.star) -->
-<!-- elog.custs <- elog$cust -->
-<!-- for (i in 1:nrow(cal.cbs)){ -->
-<!--   current.cust <- rownames(cal.cbs)[i] -->
-<!--   tot.cust.trans <- length(which(elog.custs == current.cust)) -->
-<!--   cal.trans <- cal.cbs[i, "x"] -->
-<!--   # on retire au nombre de transactions total les transactions effectuées dans la calibration pour n'avoir que cette de la période test -->
-<!--   cal.cbs[i, "x.star"] <- tot.cust.trans - cal.trans -->
-<!-- } -->
-<!-- cal.cbs[1:3,] -->
-<!-- ``` -->
+col1 <- "red"
+col2 <- "orange"
+col3 <- "deepskyblue1"
+col4 <- "blue"
+```
 
-<!-- ```{r} -->
-<!-- # Prédictions vs réalité : -->
-<!-- # Nombre de commandes dans la période test selon le nombre de commandes dans l'apprentissage -->
+### Analyse en Composantes Principales et classification
 
-<!-- # Durée de la période de test -->
-<!-- T.star <- nb.sem.holdout -->
-<!-- censor <- 8 -->
-<!-- x.star <- cal.cbs[,"x.star"] -->
-<!-- comp <- bgnbd.PlotFreqVsConditionalExpectedFrequency(params, T.star, cal.cbs, x.star, censor) -->
-<!-- ``` -->
+L'analye en composantes principales est un méthode d'analyse de données multidimensionnelle qui consiste à réduire le nombre de dimension de façon à rendre les données visualisables tout en ne perdant qu'un minimum d'informations. Ici, nous étudions nos `r nrow(allcli)` clients selon les dimensions suivantes :<br>
+Son age (le nombre de jour entre aujourd'hui et sa première commande)<br>
+Sa durée de vie (le nombre de jours entre sa première et sa dernière commande en date)<br>
+Son état actuel (client actif ou non)<br>
+Son nombre de commandes<br>
+Son panier moyen<br>
+Son absence (le nombre de jours entre aujourd'hui et sa dernière commande en date)<br>
 
-<!-- ```{r} -->
-<!-- # Prédictions vs réalité : -->
-<!-- # Nombre de commandes par semaine -->
-<!-- tot.cbt <- dc.CreateFreqCBT(elog) -->
-<!-- d.track.data <- rep(0,7*nb.sem.tot) -->
-<!-- for (i in colnames(tot.cbt)){ -->
-<!--   date.index <- difftime(as.Date(i), beg) + 1 -->
-<!--   d.track.data[date.index] <- sum(tot.cbt[,i]) -->
-<!-- } -->
-<!-- w.track.data <- rep(0, nb.sem.tot) -->
-<!-- for (j in 1:nb.sem.tot){ -->
-<!--   w.track.data[j] <- sum(d.track.data[(j*7-6):(j*7)]) -->
-<!-- } -->
+L'ACP nous permet de resumer au mieux ces 6 dimensions en 2 et de représenter les clients ainsi.
 
-<!-- T.cal <- cal.cbs[, "T.cal"] -->
-<!-- inc.tracking <- bgnbd.PlotTrackingInc(params, T.cal, nb.sem.tot, w.track.data, nb.sem.tot) -->
-<!-- ``` -->
+```{r, echo=FALSE}
+ggplot() +
+  geom_point(data = classif, aes(x = axe1, y = axe2)) +
+  theme_bw()
+``` 
 
-<!-- ```{r} -->
-<!-- cum.tracking.data <- cumsum(w.track.data) -->
-<!-- cum.tracking <- bgnbd.PlotTrackingCum(params, T.cal, nb.sem.tot, cum.tracking.data, nb.sem.tot) -->
-<!-- ``` -->
+Chaque point représente un client, et les 2 axes sont les "composantes principales", les 2 dimensions artificielles qui résument au mieux les 6 réelles.<br>
+On peut voir que les clients se découpent en plusieurs ensembles.<br>
+Utilisons une méthode de classification pour creuser la question.
 
-<!-- ```{r} -->
-<!-- ``` -->
+```{r classif, echo=FALSE}
+ggplot() +
+  geom_point(data = classif, aes(x = axe1, y = axe2, color = classe)) +
+  theme_bw() +
+  scale_color_manual(values = c(col1, col2, col3, col4)) +
+  labs(title = "Classification des clients",
+       color = NULL)
+```
 
-<!-- ```{r, echo=FALSE} -->
-<!-- ``` -->
+La classification aboutit à 4 classes (ou cohortes) différentes. Ce sont des groupes de clients qui ont des résultats similaires sur les 6 dimensions étudiées. Regardons maintenant en quoi ces cohortes se différencient pour mettre du sens sur cette classification.
+
+```{r, echo=FALSE}
+library(knitr)
+
+res <- allcli %>%
+  group_by(classe) %>%
+  summarise(nb_cli = n(),
+            actif = paste(round(100*sum(actif)/n()),"%"),
+            nb_com = round(mean(orders_count),1),
+            ddv = round(mean(ddv)),
+            absence = round(mean(pas_vu_depuis)),
+            age = round(mean(age_client)),
+            # delai = round(mean(delai_moyen, na.rm = T),1),
+            panier = round(mean(panier_moyen),1))
+
+colonnes <- c("Classe", "Nombre de clients", "Clients actifs", "Nombre de commandes moyen", "Durée de vie moyen (jours)", "Absence moyenne (jours)", "Age moyen (jours)", "Panier moyen (€)")
+kable(res, col.names = colonnes)
+```
+
+Voici les moyennes des différentes classes pour chacune des 6 dimensions.<br>
+On peut résumer les classes ainsi :<br>
+La première classe correspond aux clients qui ne sont plus actifs et qui ne l'ont jamais vraiment été. Ils ont passé peu de commandes et sont absents depuis longtemps.<br>
+La seconde classe est la classe des anciens bons clients. Ils ont des bons nombres de commandes et de bonnes durées de vie mais ils ne sont malheuresement plus actifs : absents depuis longtemps.<br>
+La troisième classe est celle des nouveaux. Ils ne sont pas là depuis longtemps et n'ont pas encore passé beaucoup de commandes mais ils sont encore actifs et nombreux, ce qui est prometteur pour la suite.<br>
+La quatrième classe est celle des meilleurs. Les clients qui nous suivent depuis longtemps, qui ont déjà beaucoup commandé et qui sont toujours actifs. Il est intéressant de noter que ce sont aussi eux qui ont les plus gros paniers moyens.
+
+### Fréquence d'achat
+
+Calculée tous les clients qui ont passé plus d'une commande.
+
+```{r}
+df <- allcli %>%
+  filter(orders_count > 2 & delai_moyen_alt != 0)
+
+N <- nrow(df)
+
+df <- df %>%
+  mutate(classe_freq = cut(delai_moyen_alt, include.lowest = T,
+                           breaks = c(0,15,30,60,150,Inf),
+                           labels = c("0-15 jours", "16-30 jours", "30-60 jours", "60-150 jours", "Plus de 150 jours"))) %>%
+  group_by(classe_freq) %>%
+  summarise(y = n()) %>%
+  ungroup() %>%
+  mutate(pct = y/N,
+         cum = pct + lag(pct))
+
+
+ggplot(data = df) +
+  geom_bar(stat = "identity", aes(x = "", y = y, fill = classe_freq), width = 1) +
+  geom_text(aes(x = 1.2, y = y, label = y)) +
+  coord_polar("y") +
+  theme_classic() +
+  labs(fill = "Fréquence moyenne") +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank())
+```
+
+```{r}
+ggplot(data = df) +
+  geom_bar(stat = "identity", aes(x = classe_freq, y = pct, fill = classe_freq)) +
+  geom_text(aes(x = classe_freq, y = pct, label = paste(round(100*pct,1))), vjust = 1.5)
+```
 
