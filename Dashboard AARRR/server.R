@@ -17,7 +17,7 @@ library(reshape2)
 source(file = "../Fonctions_Core_DB.R")
 
 ###### INITIALISATION ######
-email_equipier <- c('dumontet.thibaut@gmail.com', 'dumontet.julie@gmail.com', 'laura.h.jalbert@gmail.com', 'rehmvincent@gmail.com', 'a.mechkar@gmail.com', 'helena.luber@gmail.com', 'martin.plancquaert@gmail.com', 'badieresoscar@gmail.com', 'steffina.tagoreraj@gmail.com', 'perono.jeremy@gmail.com', 'roger.virgil@gmail.com', 'boutiermorgane@gmail.com', 'idabmat@gmail.com', 'nadinelhubert@gmail.com', 'faure.remi@yahoo.fr', 'maxime.cisilin@gmail.com', 'voto.arthur@gmail.com')
+email_equipier <- c('dumontet.thibaut@gmail.com', 'dumontet.julie@gmail.com', 'laura.h.jalbert@gmail.com', 'rehmvincent@gmail.com', 'a.mechkar@gmail.com', 'helena.luber@gmail.com', 'martin.plancquaert@gmail.com', 'badieresoscar@gmail.com', 'steffina.tagoreraj@gmail.com', 'perono.jeremy@gmail.com', 'roger.virgil@gmail.com', 'boutiermorgane@gmail.com', 'idabmat@gmail.com', 'nadinelhubert@gmail.com', 'faure.remi@yahoo.fr', 'maxime.cisilin@gmail.com', 'voto.arthur@gmail.com', 'pedro7569@gmail.com')
 zone1 <- c("69001",
            "69002",
            "69003",
@@ -108,11 +108,15 @@ shinyServer(function(input, output, session) {
                   	o.total_tax_cents,
                   	o.total_shipping_cents,
                   	o.total_discounts_cents,
+                    o.total_refund_cents,
                   	c.created_at AS client_created_at,
                   	c.email,
                     ci.zip_code,
                   	c.first_order_date,
-                  	sum(l.buying_price_cents * l.quantity) AS cogs
+                    o.total_line_items_price_cents,
+                    SUM(CEILING(l.quantity * l.selling_price_cents/(1+tax_rate))) AS gross_sale,
+                  	SUM(l.buying_price_cents * l.quantity) AS cogs,
+                    SUM(l.tax_rate * l.quantity) / SUM(l.quantity) AS taux_moyen
           FROM clients c, orders o, line_items l, contact_informations ci
           WHERE o.id = l.order_id AND o.client_id = c.id AND ci.id = o.contact_information_id
           GROUP BY  o.id,
@@ -125,10 +129,12 @@ shinyServer(function(input, output, session) {
                   	o.total_tax_cents,
                   	o.total_shipping_cents,
                   	o.total_discounts_cents,
+                    o.total_refund_cents,
                   	c.created_at,
                   	c.email,
                     ci.zip_code,
-                  	c.first_order_date"
+                  	c.first_order_date,
+                    o.total_line_items_price_cents"
     df <- extract_core(req, dbname, dbhost, dbuser, dbpass)
     
     df <- df %>%
@@ -140,7 +146,15 @@ shinyServer(function(input, output, session) {
              premiere = age < 60,
              equipier = grepl("@deligreens.com$",email) | email %in% email_equipier,
              marge = total_price_cents - cogs,
-             zone = NA)
+             zone = NA,
+             subtotal_ttc = total_line_items_price_cents - total_discounts_cents,
+             subtotal_ht = subtotal_ttc/(1+taux_moyen),
+             discount_ht = gross_sale - subtotal_ht,
+             refund_ht = total_refund_ttc/1.055,
+             shipping_ht = total_shipping_cents/1.2,
+             net_sale = gross_sale - discount_ht - refund_ht,
+             marge_comm = net_sale + shipping_ht - cogs,
+             revenu_tot_ht = net_sale + shipping_ht)
     
     df$zone[df$zip_code %in% zone1] <- "Zone 1"
     df$zone[df$zip_code %in% zone2] <- "Zone 2"

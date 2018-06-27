@@ -6,7 +6,6 @@ output:
   html_document: default
   pdf_document: default
 ---
-
 ```{r setup, include=FALSE}
 # !diagnostics off
 knitr::opts_chunk$set(echo = TRUE)
@@ -132,7 +131,7 @@ commandes <- commandes %>%
 
 ### Customer Value sur 6 mois
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, warning=FALSE}
 # Echantillon de clients : première commande passée entre DEBUT et FIN
 debut <- as.Date("2017-09-01")
 fin <- as.Date("2017-10-31")
@@ -141,10 +140,10 @@ fin <- as.Date("2017-10-31")
 duree <- 180
 ```
 
-Pour cadrer cette étude on va se baser sur les clients qui ont passé leurs premières commandes entre le `r debut` et le `r fin`<br>
+Dans cette partie, pour cadrer l'étude, nous allons nous baser sur les clients qui ont passé leurs premières commandes entre le `r debut` et le `r fin`<br>
 Chaque client va être étudié sur les 6 mois qui suivent sa première commande afin d'avoir une période d'observation égale.
 
-```{r echantillonage, echo=FALSE}
+```{r echantillonage, echo=FALSE, warning=FALSE}
 com <- commandes %>%
   # On ne garde que les clients qui ont passé leur première commande dans la periode choisie
   filter(first_order_date >= debut & first_order_date <= fin) %>%
@@ -154,7 +153,7 @@ com <- commandes %>%
 nb_com <- nrow(com)
 ```
 
-```{r rang de la commande, echo=FALSE}
+```{r rang de la commande, echo=FALSE, warning=FALSE}
 com <- com %>%
   # Calcul du rang de la commande
   arrange(client_id, order_created_at) %>%
@@ -165,16 +164,20 @@ com <- com %>%
 nb_cli <- n_distinct(com$client_id)
 ```
 
-Nous avons donc `r nb_cli` clients qui ont passé `r nb_com` en `r duree` jours.
+Nous avons donc `r nb_cli` clients qui ont passé `r nb_com` commandes en `r duree` jours.
 
-```{r gross_sales, echo=FALSE}
+```{r gross_sales, echo=FALSE, warning=FALSE}
 gross_sales_tot <- sum(com$gross_sale)
 gross_sales_cli <- gross_sales_tot/nb_cli
 ```
 
 Cela représente `r format(gross_sales_tot, big.mark = " ", scientific = F)` € de vente brute HT, soit une moyenne de `r round(gross_sales_cli,2)` € par client.
 
-```{r repurchase rate, echo=FALSE}
+##### La customer value moyenne à 6 mois de nos clients est donc `r round(gross_sales_cli,2)` €
+
+Explorons le comportement des clients pendant ces 6 mois.
+
+```{r repurchase rate, echo=FALSE, warning=FALSE}
 df <- com %>%
   filter(nieme == 2) %>%
   group_by(client_id) %>%
@@ -211,7 +214,7 @@ ggplot(data = df, aes(x = x)) +
 
 `r labels[4]` des `r nb_cli` clients ont repassé une (ou plusieurs) commande dans les 180 jours qui ont suivis leurs premières commandes.
 
-```{r graph rétention clients, echo=FALSE}
+```{r graph rétention clients, echo=FALSE, warning=FALSE}
 df <- com %>%
   group_by(age) %>%
   summarise(nb_cli = n_distinct(client_id),
@@ -243,7 +246,7 @@ ggplot(data = df, aes(x = age)) +
 Rétention des client sur 6 mois : 
 `r df$nb_cli[df$age == 5]`/`r df$nb_cli[df$age == 0]` = `r round(100*df$nb_cli[df$age == 5]/df$nb_cli[df$age == 0],1)` %
 
-```{r graph retention commandes, echo=FALSE}
+```{r graph retention commandes, echo=FALSE, warning=FALSE}
 df <- com %>%
   group_by(age) %>%
   summarise(nb_com = n(),
@@ -282,7 +285,7 @@ Rétention en terme de commandes :
 `r df$nb_com[df$age == 5]` / `r df$nb_com[df$age == 0]` = `r round(100*df$nb_com[df$age == 5]/df$nb_com[df$age == 0],1)`%
 
 
-```{r graph retention ventes, echo=FALSE}
+```{r graph retention ventes, echo=FALSE, warning=FALSE}
 df <- com %>%
   group_by(age) %>%
   summarise(ca = sum(gross_sale))
@@ -313,7 +316,7 @@ Intuitivement on peut dire que ce phénomène dépend au moins de deux facteurs 
 
 Etudions ces facteurs pour tenter de trouver un moyen de savoir si un client peut encore être considéré comme actif ou non.
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, warning=FALSE}
 # Echantillon de clients : première commande passée entre DEBUT et FIN
 debut <- as.Date("2017-07-01")
 fin <- as.Date("2018-03-31")
@@ -322,7 +325,7 @@ fin <- as.Date("2018-03-31")
 Dans cette partie il est moins important d'observer tous les clients pendant la même durée que dans la partie précédente. Tant que ces durées d'observation ne sont pas trop courtes elles n'ont pas à être égales.
 Nous allons donc nous baser sur tous les clients qui ont passé leur première commande entre le `r debut` et le `r fin`, et nous les observerons jusqu'à aujourd'hui.
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, warning=FALSE}
 breaks_class_cli <- c(1, 2, 6, Inf)
 labels_class_cli <- c("1ère", "2-5ème", "6+")
 
@@ -343,19 +346,19 @@ Cela nous donne un échantillon de `r n_distinct(comm$client_id)` clients qu'on 
 
 Répartition des délais entre 2 commandes
 
-```{r echo=FALSE}
+```{r echo=FALSE, warning=FALSE}
 # Délai entre 2 commandes
 q <- quantile(comm$delai[!comm$derniere], probs = seq(0,1,0.1), na.rm = T)
 print(q)
 ```
 
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, warning=FALSE}
 seuil <- 90
 ```
 
 
-```{r echo=FALSE}
+```{r echo=FALSE, warning=FALSE}
 pct <- round(100 * sum(comm$delai[!comm$derniere] <= seuil)/sum(!comm$derniere), 1)
 
 ggplot(mapping = aes(na.omit(comm$delai))) +
@@ -372,7 +375,7 @@ ggplot(mapping = aes(na.omit(comm$delai))) +
   theme_bw()
 ```
 
-```{r echo=FALSE}
+```{r echo=FALSE, warning=FALSE}
 # Fonction : crée un dataframe où une ligne est un délai entre 2 commandes successives d'un client (revenu = TRUE) ou entre sa derniere commande et aujourd'hui (revenu = FALSE)
 func_df_delai<- function(com){
   df <- com %>%
@@ -440,7 +443,7 @@ ggplot() +
 
 Détaillons ces résultats en prenant en compte le nombre de commandes passées.
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, warning=FALSE}
 df <- comm %>%
   filter(derniere) %>%
   group_by(nieme_class) %>%
@@ -460,7 +463,7 @@ ggplot(df) +
   
 ```
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, warning=FALSE}
 df <- func_df_delai(comm)
 
 coord <- data.frame()
@@ -494,16 +497,19 @@ La courbe rouge représente les clients aprés leurs premières commandes. Elle 
 
 Ce graphique montre bien que plus les clients sont fidèles, plus on peut laisser passer de temps avant de les considérer comme partis.<br>
 
-On peut donc définir des seuils pour considérer que les clients sont partis selon le nombre de leur commandes. Au risque 20% cela donne les seuils suivants :<br>
-45 jours pour les clients n'ayant passé qu'une commande.<br>
-90 jours pour les clients ayant passé entre 2 et 5 commandes.<br>
-120 jours pour les clients ayant dépassé 5 commandes.<br>
-
-```{r, echo=FALSE}
+```{r seuils, echo=FALSE}
 seuil1 <- 30
 seuil2 <- 50
 seuil3 <- 90
+```
 
+
+On peut donc définir des seuils pour considérer que les clients sont partis selon le nombre de leur commandes. Au risque 20% cela donne les seuils suivants :<br>
+`r seuil1` jours pour les clients n'ayant passé qu'une commande.<br>
+`r seuil2` jours pour les clients ayant passé entre 2 et 5 commandes.<br>
+`r seuil3` jours pour les clients ayant dépassé 5 commandes.<br>
+
+```{r, echo=FALSE, warning=FALSE}
 # ggplot(data = comm[!comm$derniere,], aes(x = delai)) +
 #   stat_ecdf(geom = "step") +
 #   geom_vline(data = ddply(comm[!comm$derniere,], "nieme_class", summarise, med = median(delai)), aes(xintercept = med), color = rouge) +
@@ -536,25 +542,25 @@ On voit bien que la grande majorité des commandes sont passées dans des délai
 96% des commandes n°3 à 6 sont passées moins de 90 jours après la précédente.<br>
 Presque 100% des commandes n°7+ sont passées moins<br>
 
-Servons-nous de ces seuils pour identifier les clients actifs et calculer la durée de vie des clients.
+Nous pouvons désormais nous servir de des seuils pour déterminer le statut (actif ou non) des clients et calculer leur durée de vie. Ce qui nous sera très utile dans la suite de ce document.
 
 ```{r creation du df clients, include=FALSE}
-cli <- comm %>%
-  select(client_id, first_order_date, order_created_at, gross_sale, nieme, nieme_class) %>%
-  arrange(client_id, order_created_at) %>%
-  group_by(client_id) %>%
-  summarise(premiere = min(order_created_at),
-            derniere = max(order_created_at),
-            duree = as.numeric(difftime(derniere, premiere, units = "days")),
-            total = sum(gross_sale),
-            nb_com = n(),
-            cat = last(nieme_class),
-            freq = nb_com/(as.numeric(duree)/30),
-            pas_vu_depuis = as.numeric(difftime(as.Date(now()), derniere, units = "days")),
-            actif = pas_vu_depuis <= ifelse(cat == "1ère", seuil1, ifelse(cat == "2-5ème", seuil2, seuil3)))
-
-df <- cli %>%
-  filter(nb_com > 1 & !actif)
+# cli <- comm %>%
+#   select(client_id, first_order_date, order_created_at, gross_sale, nieme, nieme_class) %>%
+#   arrange(client_id, order_created_at) %>%
+#   group_by(client_id) %>%
+#   summarise(premiere = min(order_created_at),
+#             derniere = max(order_created_at),
+#             duree = as.numeric(difftime(derniere, premiere, units = "days")),
+#             total = sum(gross_sale),
+#             nb_com = n(),
+#             cat = last(nieme_class),
+#             freq = nb_com/(as.numeric(duree)/30),
+#             pas_vu_depuis = as.numeric(difftime(as.Date(now()), derniere, units = "days")),
+#             actif = pas_vu_depuis <= ifelse(cat == "1ère", seuil1, ifelse(cat == "2-5ème", seuil2, seuil3)))
+# 
+# df <- cli %>%
+#   filter(nb_com > 1 & !actif)
 
 # moy <- mean(df$duree)
 # n <- nrow(df)
@@ -571,12 +577,12 @@ df <- cli %>%
 
 ### Classification des clients
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, warning=FALSE}
 aujourdhui <- as.Date("2018-06-25")
 ```
 
-
-On prend tous nos client au 25 juin 2018 (jour de l'étude).
+Dans cette partie nous voulons étudier notre base clients actuelle, nous allons donc prendre en compte tous les clients et commandes depuis le 1er mai 2017, date de création de notre base de données.
+Les données s'arrêtent au 25 juin 2018, le jour où cette étude à été réalisée.
 
 ```{r, include=FALSE}
 allcli <- commandes %>%
@@ -584,60 +590,25 @@ allcli <- commandes %>%
   arrange(client_id, order_created_at) %>% 
   group_by(client_id) %>%
   summarise(orders_count = first(orders_count),
-            age_client = round(as.numeric(difftime(aujourdhui, first(first_order_date), units = "days"))),
-            ddv = round(as.numeric(difftime(max(order_created_at), first(first_order_date), units = "days"))),
+            premiere = first(first_order_date),
+            derniere = max(order_created_at),
+            age_client = round(as.numeric(difftime(aujourdhui, premiere, units = "days"))),
+            ddv = round(as.numeric(difftime(derniere, premiere, units = "days"))),
             panier_moyen = mean(gross_sale),
-            # total = sum(gross_sale),
+            # Valeur du client, calculable seulement pour les clients dont on a toutes les commandes : clients arrivés après le 1er mai 18
+            value = ifelse(premiere >= as.Date("2017-05-01"), sum(gross_sale), NA),
             delai_moyen = mean(delai, na.rm = T),
             delai_moyen_alt = ddv/orders_count,
-            pas_vu_depuis = round(as.numeric(difftime(aujourdhui, max(order_created_at), units= "days"))),
+            pas_vu_depuis = round(as.numeric(difftime(aujourdhui, derniere, units= "days"))),
             cat = cut(orders_count, 
                            breaks = breaks_class_cli,
                            labels = labels_class_cli,
                            right = F,
                            include.lowest = T),
             actif = as.integer(pas_vu_depuis <= ifelse(cat == "1ère", seuil1, ifelse(cat == "2-5ème", seuil2, seuil3))))
-# rownames(allcli) <- allcli$client_id
-# allcli <- allcli %>%
-#   select(-client_id)
 ```
 
-<!-- # ```{r} -->
-<!-- # library("FactoMineR") -->
-<!-- # library("factoextra") -->
-<!-- # library("corrplot") -->
-<!-- #  -->
-<!-- # # ACP -->
-<!-- # res.pca <- PCA(allcli[,-6], graph = FALSE) -->
-<!-- #  -->
-<!-- # # Nombre d'axes -->
-<!-- # fviz_eig(res.pca, addlabels = TRUE, ylim = c(0, 50)) -->
-<!-- #  -->
-<!-- # # VARIABLES -->
-<!-- # var <- get_pca_var(res.pca) -->
-<!-- #  -->
-<!-- # # Cercle de corrélation -->
-<!-- # fviz_pca_var(res.pca, col.var = "black") -->
-<!-- #  -->
-<!-- # # Représentation -->
-<!-- # corrplot(var$cos2, is.corr=FALSE) -->
-<!-- #  -->
-<!-- # # Contribution -->
-<!-- # corrplot(var$contrib, is.corr=FALSE) -->
-<!-- #  -->
-<!-- # # INDIVIDUS -->
-<!-- # ind <- get_pca_ind(res.pca) -->
-<!-- #  -->
-<!-- # fviz_pca_ind (res.pca, label = "none") -->
-<!-- #  -->
-<!-- # fviz_pca_ind(res.pca, -->
-<!-- #              geom.ind = "point", # Montre les points seulement (mais pas le "text") -->
-<!-- #              col.ind = allcli$cat, # colorer by groups -->
-<!-- #              palette = c(rouge, bleu, vert), -->
-<!-- #              # addEllipses = TRUE, # Ellipses de concentration -->
-<!-- #              legend.title = "Groups" -->
-<!-- #              ) -->
-<!-- # ``` -->
+#### Analyse en Composantes Principales
 
 ```{r, include=FALSE}
 # L'ACP et la classification ont été faites avec SPAD
@@ -666,8 +637,6 @@ col3 <- "deepskyblue1"
 col4 <- "blue"
 ```
 
-### Analyse en Composantes Principales et classification
-
 L'analye en composantes principales est un méthode d'analyse de données multidimensionnelle qui consiste à réduire le nombre de dimension de façon à rendre les données visualisables tout en ne perdant qu'un minimum d'informations. Ici, nous étudions nos `r nrow(allcli)` clients selon les dimensions suivantes :<br>
 Son age (le nombre de jour entre aujourd'hui et sa première commande)<br>
 Sa durée de vie (le nombre de jours entre sa première et sa dernière commande en date)<br>
@@ -678,7 +647,7 @@ Son absence (le nombre de jours entre aujourd'hui et sa dernière commande en da
 
 L'ACP nous permet de resumer au mieux ces 6 dimensions en 2 et de représenter les clients ainsi.
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, warning=FALSE}
 ggplot() +
   geom_point(data = classif, aes(x = axe1, y = axe2)) +
   theme_bw()
@@ -688,18 +657,20 @@ Chaque point représente un client, et les 2 axes sont les "composantes principa
 On peut voir que les clients se découpent en plusieurs ensembles.<br>
 Utilisons une méthode de classification pour creuser la question.
 
-```{r classif, echo=FALSE}
+#### Classification
+
+```{r classif, echo=FALSE, warning=FALSE}
 ggplot() +
   geom_point(data = classif, aes(x = axe1, y = axe2, color = classe)) +
   theme_bw() +
   scale_color_manual(values = c(col1, col2, col3, col4)) +
-  labs(title = "Classification des clients",
+  labs(#title = "Classification des clients",
        color = NULL)
 ```
 
 La classification aboutit à 4 classes (ou cohortes) différentes. Ce sont des groupes de clients qui ont des résultats similaires sur les 6 dimensions étudiées. Regardons maintenant en quoi ces cohortes se différencient pour mettre du sens sur cette classification.
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, warning=FALSE}
 library(knitr)
 
 res <- allcli %>%
@@ -719,16 +690,40 @@ kable(res, col.names = colonnes)
 
 Voici les moyennes des différentes classes pour chacune des 6 dimensions.<br>
 On peut résumer les classes ainsi :<br>
+
 La première classe correspond aux clients qui ne sont plus actifs et qui ne l'ont jamais vraiment été. Ils ont passé peu de commandes et sont absents depuis longtemps.<br>
 La seconde classe est la classe des anciens bons clients. Ils ont des bons nombres de commandes et de bonnes durées de vie mais ils ne sont malheuresement plus actifs : absents depuis longtemps.<br>
 La troisième classe est celle des nouveaux. Ils ne sont pas là depuis longtemps et n'ont pas encore passé beaucoup de commandes mais ils sont encore actifs et nombreux, ce qui est prometteur pour la suite.<br>
 La quatrième classe est celle des meilleurs. Les clients qui nous suivent depuis longtemps, qui ont déjà beaucoup commandé et qui sont toujours actifs. Il est intéressant de noter que ce sont aussi eux qui ont les plus gros paniers moyens.
 
+```{r CLV par classe, echo=FALSE, warning=FALSE}
+res <- res %>%
+  mutate(value_moy = nb_com * panier)
+  
+
+ggplot(res) +
+  geom_bar(aes(x = classe, y = value_moy, fill = classe), stat ="identity") +
+  scale_fill_manual(values = c(col1, col2, col3, col4)) +
+  geom_text(aes(x = classe, y = value_moy, label = paste(round(value_moy),"€")), color = "white", vjust = 1.3) +
+  geom_hline(yintercept = 0) +
+  labs(title = "Customer Value historique moyenne",
+       y = "Customer Value moyenne (en €)") +
+  theme_classic() +
+  theme(panel.grid.major.y = element_line(color = "gray", size = 0.1),
+        panel.grid.minor.y = element_line(color = "gray", size = 0.1, linetype = "dashed"),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        legend.position = "none")
+```
+
+Sans surprise on constate que la valeur des clients de la classe 4 est nettement supérieure aux autres. Il est important de noter aussi que ce graphique montre la valeur actuelle (ou historique) des clients. C'est à dire qu'il ne compte que les transactions passées des clients, les valeurs des clients des classes actives (3 et 4) vont donc augmenter au fur et à mesure de leurs futures commandes.
+
 ### Fréquence d'achat
 
 Calculée tous les clients qui ont passé plus d'une commande.
 
-```{r}
+```{r revenu des classes, include=FALSE}
 df <- allcli %>%
   filter(orders_count > 2 & delai_moyen_alt != 0)
 
@@ -737,29 +732,108 @@ N <- nrow(df)
 df <- df %>%
   mutate(classe_freq = cut(delai_moyen_alt, include.lowest = T,
                            breaks = c(0,15,30,60,150,Inf),
-                           labels = c("0-15 jours", "16-30 jours", "30-60 jours", "60-150 jours", "Plus de 150 jours"))) %>%
+                           labels = c("0-15 jours", "16-30 jours", "31-60 jours", "61-150 jours", "Plus de 150 jours"))) %>%
   group_by(classe_freq) %>%
   summarise(y = n()) %>%
   ungroup() %>%
   mutate(pct = y/N,
-         cum = pct + lag(pct))
+         cum = cumsum(y),
+         mid = cum - y/1.2)
 
 
-ggplot(data = df) +
-  geom_bar(stat = "identity", aes(x = "", y = y, fill = classe_freq), width = 1) +
-  geom_text(aes(x = 1.2, y = y, label = y)) +
-  coord_polar("y") +
-  theme_classic() +
-  labs(fill = "Fréquence moyenne") +
-  theme(axis.text = element_blank(),
-        axis.title = element_blank(),
-        axis.line = element_blank(),
-        axis.ticks = element_blank())
+# ggplot(data = df) +
+#   geom_bar(stat = "identity", aes(x = "", y = y, fill = classe_freq), width = 1) +
+#   geom_text(aes(x = "", y = mid, label = paste(round(100*pct,1),"%"))) +
+#   coord_polar("y") +
+#   theme_classic() +
+#   labs(fill = "Fréquence moyenne") +
+#   theme(axis.text = element_blank(),
+#         axis.title = element_blank(),
+#         axis.line = element_blank(),
+#         axis.ticks = element_blank())
 ```
 
-```{r}
+```{r frequences achat, echo=FALSE, warning=FALSE}
 ggplot(data = df) +
-  geom_bar(stat = "identity", aes(x = classe_freq, y = pct, fill = classe_freq)) +
-  geom_text(aes(x = classe_freq, y = pct, label = paste(round(100*pct,1))), vjust = 1.5)
+  geom_bar(stat = "identity", aes(x = classe_freq, y = pct, fill = classe_freq), width = 1) +
+  geom_text(aes(x = classe_freq, y = pct, label = paste(round(100*pct,1),"%")), vjust = -0.3) +
+  geom_hline(yintercept = 0) +
+  theme_classic() +
+  labs(title = "Distribution des fréquences d'achat des clients",
+       x = "Fréquence d'achat moyenne du client") +
+  scale_fill_brewer(palette = "Greens", direction = -1) +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5))
+```
+
+### Panier moyen
+
+Calculée sur tous les clients.
+
+```{r paniers moyens, echo=FALSE, warning=FALSE}
+N <- nrow(allcli)
+
+df <- allcli %>%
+  mutate(classe_panier = cut(panier_moyen,
+                             breaks = c(seq(0,160,20),Inf))) %>%
+  group_by(classe_panier) %>%
+  summarise(nb = n(),
+            pct = nb/N)
+
+ggplot(df) +
+  geom_bar(aes(x = classe_panier, y = pct, fill = classe_panier), stat = "identity", width = 1) +
+  geom_text(aes(x = classe_panier, y = pct, label = paste(round(pct*100,1),"%")), vjust = -0.3) +
+  geom_hline(yintercept = 0) +
+  scale_fill_brewer(palette = "Greens") +
+  theme_classic() +
+  labs(title = "Distribution des paniers moyens des clients",
+       x = "Panier moyen (€)") +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5))
+```
+
+On peut aussi observer les paniers moyens de la façon suivante.
+
+```{r repartition panier moyen, echo=FALSE, warning=FALSE}
+q <- quantile(allcli$panier_moyen)[2:4]
+
+ggplot(mapping = aes(allcli$panier_moyen)) +
+  stat_ecdf(geom = "step") +
+  scale_y_continuous(breaks = seq(0,1,0.1), labels = paste(100*seq(0,1,0.1),"%")) +
+  scale_x_continuous(breaks = seq(0, 300, 20)) +
+  # 1er quartile : segment vertical
+  geom_segment(aes(x = q[1], xend = q[1], y = 0, yend = 0.25), linetype = "dashed", colour = rouge) +
+  # 1er quartile  : segment horizontal
+  geom_segment(aes(x = 0, xend = q[1], y = 0.25, yend = 0.25), linetype = "dashed", colour = rouge) +
+  # 1er quartile  : texte
+  geom_text(aes(x = q[1], y = 0.25, label = paste("25% =", round(q[1]),"€")), color = rouge, hjust = 1.05, vjust = -0.3) +
+  # mediane : segment vertical
+  geom_segment(aes(x = q[2], xend = q[2], y = 0, yend = 0.5), linetype = "dashed", colour = rouge) +
+  # mediane : segment horizontal
+  geom_segment(aes(x = 0, xend = q[2], y = 0.5, yend = 0.5), linetype = "dashed", colour = rouge) +
+  # mediane : texte
+  geom_text(aes(x = q[2], y = 0.5, label = paste("Médiane =", round(q[2]),"€")), color = rouge, hjust = 1.05, vjust = -0.3) +
+  # 3ème quartile  : segment vertical
+  geom_segment(aes(x = q[3], xend = q[3], y = 0, yend = 0.75), linetype = "dashed", colour = rouge) +
+  # 3ème quartile : segment horizontal
+  geom_segment(aes(x = 0, xend = q[3], y = 0.75, yend = 0.75), linetype = "dashed", colour = rouge) +
+  # 3ème quartile : texte
+  geom_text(aes(x = q[3], y = 0.75, label = paste("75% =", round(q[3]),"€")), color = rouge, hjust = 1.05, vjust = -0.3) +
+  ggtitle("Courbe de répartition des paniers moyens") +
+  xlab("X = Panier moyen (en €)") +
+  ylab("Pourcentage des paniers moyens inférieurs à X") +
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = 0) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  coord_cartesian(xlim = c(0,260))
 ```
 
