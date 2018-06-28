@@ -14,7 +14,11 @@ library(htmltools)
 library(reshape2)
 
 ###### FONCTIONS #########
-source(file = "../Fonctions_Core_DB.R")
+# Pour lancer en local
+# source(file = "../Fonctions_Core_DB.R")
+
+# Pour deployer : copier Fonctions_Core_DB.R dabs le dossier de l'app
+source(file = "./Fonctions_Core_DB.R")
 
 ###### INITIALISATION ######
 email_equipier <- c('dumontet.thibaut@gmail.com', 'dumontet.julie@gmail.com', 'laura.h.jalbert@gmail.com', 'rehmvincent@gmail.com', 'a.mechkar@gmail.com', 'helena.luber@gmail.com', 'martin.plancquaert@gmail.com', 'badieresoscar@gmail.com', 'steffina.tagoreraj@gmail.com', 'perono.jeremy@gmail.com', 'roger.virgil@gmail.com', 'boutiermorgane@gmail.com', 'idabmat@gmail.com', 'nadinelhubert@gmail.com', 'faure.remi@yahoo.fr', 'maxime.cisilin@gmail.com', 'voto.arthur@gmail.com', 'pedro7569@gmail.com')
@@ -145,15 +149,15 @@ shinyServer(function(input, output, session) {
              age = as.numeric(difftime(created_at, first_order_date, units = "min")),
              premiere = age < 60,
              equipier = grepl("@deligreens.com$",email) | email %in% email_equipier,
-             marge = total_price_cents - cogs,
+             # marge = total_price_cents - cogs,
              zone = NA,
              subtotal_ttc = total_line_items_price_cents - total_discounts_cents,
              subtotal_ht = subtotal_ttc/(1+taux_moyen),
              discount_ht = gross_sale - subtotal_ht,
-             refund_ht = total_refund_ttc/1.055,
+             refund_ht = total_refund_cents/1.055,
              shipping_ht = total_shipping_cents/1.2,
              net_sale = gross_sale - discount_ht - refund_ht,
-             marge_comm = net_sale + shipping_ht - cogs,
+             marge_com = net_sale + shipping_ht - cogs,
              revenu_tot_ht = net_sale + shipping_ht)
     
     df$zone[df$zip_code %in% zone1] <- "Zone 1"
@@ -166,7 +170,7 @@ shinyServer(function(input, output, session) {
     
     # On groupe par code postal par défaut
     df$group_geo <- df$zip_code
-    
+    # assign("df",df,envir = .GlobalEnv)
     df
   })
   
@@ -237,6 +241,7 @@ shinyServer(function(input, output, session) {
         filter(nouveau)
     }
     
+    # assign("df",df,envir = .GlobalEnv)
     # sortie <- list(df, cli, periode_en_cours)
     sortie <- list(df, cli)
     sortie
@@ -298,24 +303,33 @@ shinyServer(function(input, output, session) {
     # Calcul du panier moyen par période
     moy <- df %>%
       group_by(group, lib) %>%
-      summarise(mean = mean(total_price_cents/100),
-                marge = mean(marge/100),
-                discount = mean(total_discounts_cents/100)) %>%
+      summarise(brut = mean(gross_sale/100),
+                marge = mean(marge_com/100),
+                net = mean(net_sale/100)) %>%
       ungroup()
     # La borne supérieure de la graduation
-    max <- ceiling(max(moy$mean) * 1.1)
+    max <- ceiling(max(moy$brut) * 1.1)
 
     g1 <- plot_ly(data = moy,
                   x = ~group,
-                  y = ~mean,
+                  y = ~brut,
                   marker = list(color = bleu),
                   line = list(color = bleu),
-                  name = "Panier moyen",
+                  name = "Panier moyen brut",
                   type ="scatter",
                   mode = "lines+markers",
                   hoverinfo = "text",
                   hovertext = ~paste(lib,
-                                     '<br>Panier moyen =', paste(format(round(mean,2), big.mark=" ", decimal.mark=","),"€"))) %>%
+                                     '<br>Panier moyen brut =', paste(format(round(brut,2), big.mark=" ", decimal.mark=","),"€"))) %>%
+      add_trace(y = ~net,
+                marker = list(color = vert),
+                line = list(color = vert),
+                name = "Panier moyen net",
+                mode = "lines+markers",
+                visible = "legendonly",
+                hoverinfo = "text",
+                hovertext = ~paste(lib,
+                                   '<br>Panier moyen net =', paste(format(round(net,2), big.mark=" ", decimal.mark=","),"€"))) %>%
       add_trace(y = ~marge,
                 marker = list(color = rouge),
                 line = list(color = rouge),
@@ -323,17 +337,8 @@ shinyServer(function(input, output, session) {
                 mode = "lines+markers",
                 hoverinfo = "text",
                 hovertext = ~paste(lib,
-                                   '<br>Marge moyenne =', paste(format(round(marge,2), big.mark=" ", decimal.mark=","),"€"),
-                                   '<br>Pct =', paste(round(100*marge/mean,1),"%"))) %>%
-      add_trace(y = ~discount,
-                marker = list(color = vert),
-                line = list(color = vert),
-                name = "Discounts",
-                mode = "lines+markers",
-                visible = "legendonly",
-                hoverinfo = "text",
-                hovertext = ~paste(lib,
-                                   '<br>Discount moyenne =', paste(format(round(discount,2), big.mark=" ", decimal.mark=","),"€"))) %>%
+                                   '<br>Marge commerciale moyenne =', paste(format(round(marge,2), big.mark=" ", decimal.mark=","),"€"),
+                                   '<br>Pct (du panier moyen net) =', paste(round(100*marge/net,1),"%"))) %>%
       layout(xaxis = list(title = input$periode,
                           tickvals = ~group,
                           ticktext = ~if(input$periode == "Mois"){lib}else{format(group,"%d/%m")}),
@@ -342,51 +347,52 @@ shinyServer(function(input, output, session) {
     g1
   })
   
-  # CA et marge
+  # Revenus totaux ht et marge commerciale
   output$ventes <- renderPlotly({
     df <- reac_filtres()[[1]]
     
     ca <- df %>%
       group_by(group, lib) %>%
-      summarise(brute = sum(total_price_cents/100),
-                nette = sum(marge/100),
-                discounts = sum(total_discounts_cents/100)) %>%
+      summarise(revenu = sum(revenu_tot_ht/100),
+                marge = sum(marge_com/100)
+                # ,discounts = sum(total_discounts_cents/100)
+                ) %>%
       ungroup()
-    max <- ceiling(max(ca$brute) * 1.1)
+    max <- ceiling(max(ca$revenu) * 1.1)
     
     g1 <- plot_ly(data = ca,
                   x = ~group,
-                  y = ~brute,
+                  y = ~revenu,
                   marker = list(color = bleu),
                   line = list(color = bleu),
-                  name = "CA",
+                  name = "Revenus totaux HT",
                   type = "scatter",
                   mode = "lines+markers",
                   hoverinfo = "text",
                   hovertext = ~paste(lib,
-                                     '<br>CA =', paste(format(round(brute,2), big.mark=" ", decimal.mark=","),"€"))) %>%
-      add_trace(y = ~nette,
+                                     '<br>Revenus totaux HT =', paste(format(round(revenu,2), big.mark=" ", decimal.mark=","),"€"))) %>%
+      add_trace(y = ~marge,
                 marker = list(color = rouge),
                 line = list(color = rouge),
                 name = "Marge commerciale",
                 mode = "lines+markers",
                 hoverinfo = "text",
                 hovertext = ~paste(lib,
-                                   '<br>Marge commerciale =', paste(format(round(nette,2), big.mark=" ", decimal.mark=","),"€"),
-                                   '<br>Pct =', paste(round(100*nette/brute,1),"%"))) %>%
-      add_trace(y = ~discounts,
-                marker = list(color = vert),
-                line = list(color = vert),
-                name = "Discounts",
-                mode = "lines+markers",
-                visible = "legendonly",
-                hoverinfo = "text",
-                hovertext = ~paste(lib,
-                                   '<br>Discounts =', paste(format(round(discounts,2), big.mark=" ", decimal.mark=","),"€"))) %>%
+                                   '<br>Marge commerciale =', paste(format(round(marge,2), big.mark=" ", decimal.mark=","),"€"),
+                                   '<br>Pct =', paste(round(100*marge/revenu,1),"%"))) %>%
+      # add_trace(y = ~discounts,
+      #           marker = list(color = vert),
+      #           line = list(color = vert),
+      #           name = "Discounts",
+      #           mode = "lines+markers",
+      #           visible = "legendonly",
+      #           hoverinfo = "text",
+      #           hovertext = ~paste(lib,
+      #                              '<br>Discounts =', paste(format(round(discounts,2), big.mark=" ", decimal.mark=","),"€"))) %>%
       layout(xaxis = list(title = input$periode,
                           tickvals = ~group,
                           ticktext = ~if(input$periode == "Mois"){lib}else{format(group,"%d/%m")}),
-             yaxis = list (title = "Ventes",
+             yaxis = list (title = "Revenus",
                            range = c(0, max)))
     g1
   })
@@ -470,10 +476,10 @@ shinyServer(function(input, output, session) {
   ################## INFOBOX ##################
   output$box_panier <- renderValueBox({
     df <- reac_filtres()[[1]]
-    val <- mean(df$total_price_cents/100) %>%
+    val <- mean(df$net_sale/100) %>%
       round(2)
     valueBox(value = paste(format(val, big.mark = " ", scientific = F, decimal.mark = ","), "€"),
-             subtitle = tags$p(style = "font-size: 16px;", "Panier moyen"),
+             subtitle = tags$p(style = "font-size: 16px;", "Panier moyen net"),
              icon = icon("shopping-basket"),
              color = "light-blue")
   })
@@ -489,9 +495,9 @@ shinyServer(function(input, output, session) {
   
   output$box_ventes <- renderValueBox({
     df <- reac_filtres()[[1]]
-    val <- round(sum(df$total_price_cents/100),0)
+    val <- round(sum(df$revenu_tot_ht/100),0)
     valueBox(value = paste(format(val, big.mark = " ", scientific = F), "€"),
-             subtitle = tags$p(style = "font-size: 16px;", "Ventes totales"),
+             subtitle = tags$p(style = "font-size: 16px;", "Revenus Totaux HT"),
              icon = icon("eur"),
              color = "aqua")
   })
@@ -626,12 +632,12 @@ shinyServer(function(input, output, session) {
       
       fluidRow(
         column(width = 6,
-               box(title = "Ventes",
+               box(title = "Revenus",
                    solidHeader = T,
                    status = "primary",
                    width = 12,
                    plotlyOutput("ventes", height = "250px")),
-               box(title = "Marge et panier moyen",
+               box(title = "Panier moyen",
                    solidHeader = T,
                    status = "info",
                    width = 12,
@@ -647,6 +653,18 @@ shinyServer(function(input, output, session) {
                    status = "success",
                    width = 12,
                    plotlyOutput("commandes", height = "250px")))
+      ),
+      fluidRow(
+        column(width = 8),
+        column(width = 4,
+               box(title = "Détails",
+                   width = 12,
+                   collapsible = T,
+                   collapsed = T,
+                   p("Revenus Totaux HT = Net Sales + Shipping HT - COGS HT"),
+                   p("Marge Commerciale = Net Sales + Shipping HT"),
+                   p("Net Sales = Gross Sales - Discount HT - Refund HT"),
+                   p("Gross Sales : Somme des prix HT des produits commandés")))
       )
     )
     
@@ -669,7 +687,7 @@ shinyServer(function(input, output, session) {
                selectInput("choix_var", label = "Mesure à afficher", 
                            choices = list("Nombre de commandes" = "nb_com",
                                           "Nombre de clients" = "nb_cli",
-                                          "Chiffre d'affaire TTC" = "ca"), 
+                                          "Revenus Totaux HT" = "revenus"), 
                            selected = "nb_com")),
         column(width = 3,
                radioButtons("echelle", label = "Echelle", 
@@ -709,7 +727,7 @@ shinyServer(function(input, output, session) {
       group_by(zip_code) %>%
       summarise(nb_com = n(),
                 nb_cli = n_distinct(client_id),
-                ca = sum(total_price_cents/100)) %>%
+                revenu = sum(revenu_tot_ht/100)) %>%
       ungroup() %>% as.data.frame()
     
     # Importation des polygones des communes
@@ -739,7 +757,7 @@ shinyServer(function(input, output, session) {
       df_cp2 <- data.frame(zip_code = liste_cp[!(liste_cp %in% df_cp$zip_code)],
                            nb_com = 0,
                            nb_cli = 0,
-                           ca = 0)
+                           revenu = 0)
       print("prep_geo5")
       # Fusion des 2 df
       df_cp <- rbind(df_cp, df_cp2)
@@ -788,17 +806,14 @@ shinyServer(function(input, output, session) {
       #   lapply(htmltools::HTML)
       couleurs <- "Reds"
     }else{
-      cp$val <- cp$ca
-      titre <- "Chiffre d'affaire TTC"
-      # labels <- sprintf("<strong>%s</strong><br/>%s € de CA TTC",
-      #                   cp$zip_code, format(round(cp$val), big.mark = " ", decimal.mark = ",", scientific = F)) %>%
-      #   lapply(htmltools::HTML)
+      cp$val <- cp$revenu
+      titre <- "Revenus Totaux HT"
       couleurs <- "Greens"
     }
     
     # Labels
-    labels <- sprintf("<strong>%s</strong><br/>%g commandes<br/>%g clients<br/>%s € de CA TTC",
-                      cp$zip_code, cp$nb_com, cp$nb_cli, format(round(cp$ca), big.mark = " ", decimal.mark = ",", scientific = F)) %>%
+    labels <- sprintf("<strong>%s</strong><br/>%g commandes<br/>%g clients<br/>%s € de revenus HT",
+                      cp$zip_code, cp$nb_com, cp$nb_cli, format(round(cp$revenu), big.mark = " ", decimal.mark = ",", scientific = F)) %>%
       lapply(htmltools::HTML)
     
     # Palette de couleurs
@@ -846,7 +861,7 @@ shinyServer(function(input, output, session) {
                   pal = pal,
                   values = cp$val,
                   title = titre,
-                  labFormat = labelFormat(suffix = if(input$choix_var == "ca"){" €"}else{NULL}),
+                  labFormat = labelFormat(suffix = if(input$choix_var == "revenus"){" €"}else{NULL}),
                   opacity = 1)
     }
     map
