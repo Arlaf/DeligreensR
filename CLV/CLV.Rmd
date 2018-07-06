@@ -11,9 +11,11 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 
 library(ggplot2)
-library(plyr) # Ne pas changer l'ordre de chargement, c'est plyr puis dplyr
-library(dplyr) # Ne pas changer l'ordre de chargement, c'est plyr puis dplyr
+library(plyr) # Ne pas changer l'ordre de chargement : plyr puis dplyr
+library(dplyr) # Ne pas changer l'ordre de chargement : plyr puis dplyr
 library(BTYD)
+library(survival)
+library(survminer)
 
 
 source("../Fonctions_Core_DB.R")
@@ -65,8 +67,12 @@ req <- "SELECT  o.order_number,
 commandes <- extract_core(req, dbname, dbhost, dbuser, dbpass)
 
 # Corrections manuelles :
+# Client_id avec des commandes remboursées complètement : comptées dans orders_number mais inexistantes dans la bd Core 
+commandes$orders_count[commandes$client_id == 2478] <- commandes$orders_count[commandes$client_id == 2478] -1
+commandes$orders_count[commandes$client_id == 2575] <- commandes$orders_count[commandes$client_id == 2575] -1
 # Client_id avec des first_order_date erronées
 commandes$first_order_date[commandes$client_id == 4050] <- as.POSIXct("2018-06-03 00:00:01")
+commandes$first_order_date[commandes$client_id == 4199] <- as.POSIXct("2018-06-20 00:00:01")
 # Montants erronés
 commandes$total_price[commandes$order_number == 7574] = commandes$gross_sale[commandes$order_number == 7574] = 12732
 commandes <- commandes %>%
@@ -75,9 +81,28 @@ commandes <- commandes %>%
   group_by(client_id) %>%
   # Si un client a été créé après le 30 avril 2017 et qu'il n'a pas de date de premiere commande on la trouve
   mutate(first_order_date = as.POSIXct(ifelse(is.na(first_order_date) & client_created_at > as.Date("2017-04-30"), min(order_created_at),first_order_date), origin = "1970-01-01")) %>%
-  ungroup() %>%
+  ungroup()
   # On retire les commandes avec des ventes = 0 € car se sont soit des annulations soit des erreurs dans la BD
+    # D'abord on corrige le orders_count
+  temp <- commandes %>%
+    filter(gross_sale <= 0) %>%
+    group_by(client_id) %>%
+    summarise(nb_a_0 = n())
+  commandes <- left_join(commandes, temp, by = "client_id") %>%
+    mutate(orders_count = ifelse(is.na(nb_a_0), orders_count, orders_count - nb_a_0)) %>%
+    select(-nb_a_0)
+  rm(temp)
+    # Puis on enlève ces commandes
+commandes <- commandes %>%
   filter(gross_sale > 0)
+# Orders_count erroné
+# liste des clients pour lesquels ont a plus de commandes dans le df que leur orders_count
+commandes <- commandes %>%
+  group_by(client_id) %>%
+  mutate(diff = n() - first(orders_count)) %>%
+  ungroup() %>%
+  mutate(orders_count = ifelse(diff > 0, orders_count + diff, orders_count)) %>%
+  select(-diff)
 
 # Mise en forme
 commandes <- commandes %>%
@@ -87,15 +112,32 @@ commandes <- commandes %>%
          first_order_date = as.Date(first_order_date)) %>%
   # Conversion des centimes en euros
   mutate(gross_sale = gross_sale/100,
-         total_price = total_price/100,
+         # total_price = total_price/100,
          shipping_ht = shipping_ht/100)
 
 # Si un client a passé 2 commandes le même jour, on les regroupe
 commandes <- commandes %>%
   group_by(client_id, email, orders_count, client_created_at, first_order_date, order_created_at) %>%
-  summarise(total_price = sum(total_price),
+  summarise(#total_price = sum(total_price),
             gross_sale = sum(gross_sale),
-            shipping_ht = sum(shipping_ht))
+            shipping_ht = sum(shipping_ht),
+            nb_a_corr = n()-1) %>%
+  ungroup()
+# Et on réduit orders_count en conséquence
+temp <- commandes %>%
+  group_by(client_id) %>%
+  summarise(correction = sum(nb_a_corr)) %>%
+  ungroup()
+commandes <- left_join(commandes, temp, by = "client_id") %>%
+  mutate(orders_count = orders_count - correction) %>%
+  select(-nb_a_corr, -correction)
+rm(temp)
+
+# Pour la colonne nieme_classe
+breaks_class_cli <- c(1, 2, 6, Inf)
+labels_class_cli <- c("1ère", "2-5ème", "6+")
+# breaks_class_cli <- c(1, 2, 3, Inf)
+# labels_class_cli <- c("1ère", "2-3ème", "4+")
 
 # Création de colonnes
 commandes <- commandes %>%
@@ -104,7 +146,12 @@ commandes <- commandes %>%
   mutate(delai = ifelse(client_id == lag(client_id), round(difftime(lag(order_created_at), order_created_at, units = "days")), NA))%>%
   # nieme = la commande est la combientième du client
   group_by(client_id) %>%
-  # mutate(nieme = row_number() + orders_count - max(row_number())) %>%
+  mutate(nieme = orders_count - row_number() + 1,
+         nieme_class = cut(nieme, 
+                           breaks = breaks_class_cli,
+                           labels = labels_class_cli,
+                           right = F,
+                           include.lowest = T)) %>%
   # derniere : la commande est-elle la dernière du client
   mutate(derniere = order_created_at == max(order_created_at)) %>%
   ungroup() %>%
@@ -126,7 +173,11 @@ commandes <- commandes %>%
   # On ne garde que les commandes des clients qui ne sont pas des équipiers
   filter(!(email %in% email_equipier) & !(grepl("@deligreens.com$",email))) %>%
   # On ne garde que les données postérieures au 1er mai 2017
-  filter(order_created_at >= as.Date("2017-05-01"))  
+  filter(order_created_at >= as.Date("2017-05-01"))
+
+# Vieilles commandes
+commandes2 <- read.csv("../old_commandes_shopify.csv", sep = ";", header = T)
+
 ```
 
 ### Customer Value sur 6 mois
@@ -156,10 +207,10 @@ nb_com <- nrow(com)
 ```{r rang de la commande, echo=FALSE, warning=FALSE}
 com <- com %>%
   # Calcul du rang de la commande
-  arrange(client_id, order_created_at) %>%
-  group_by(client_id) %>%
-  mutate(nieme = row_number()) %>%
-  ungroup()
+  arrange(client_id, order_created_at)# %>%
+  # group_by(client_id) %>%
+  # mutate(nieme = row_number()) %>%
+  # ungroup()
 
 nb_cli <- n_distinct(com$client_id)
 ```
@@ -310,41 +361,40 @@ Rétention en terme de ventes :
 
 Lorsque la relation commerciale n'est pas contractuelle, il est difficile de savoir quand un client est parti ou bien si on va le voir revenir. Pour aller plus loin dans la Customer Lifetime Value (CLV), il faut que nous établissions une méthode de détection des départs clients.
 
-Intuitivement on peut dire que ce phénomène dépend au moins de deux facteurs :\n
-- la durée depuis laquelle le client n'a pas passé de commande\n
+Intuitivement on peut dire que ce phénomène dépend au moins de deux facteurs :<br>
+- la durée depuis laquelle le client n'a pas passé de commande<br>
 - le nombre de commandes du client, l'idée ici est que les clients régulier vont moins vite nous quitter que les clients occasionnels
 
 Etudions ces facteurs pour tenter de trouver un moyen de savoir si un client peut encore être considéré comme actif ou non.
 
 ```{r, echo=FALSE, warning=FALSE}
 # Echantillon de clients : première commande passée entre DEBUT et FIN
-debut <- as.Date("2017-07-01")
-fin <- as.Date("2018-03-31")
+debut2 <- as.Date("2017-07-01")
+fin2 <- as.Date("2018-03-31")
 ```
 
 Dans cette partie il est moins important d'observer tous les clients pendant la même durée que dans la partie précédente. Tant que ces durées d'observation ne sont pas trop courtes elles n'ont pas à être égales.
-Nous allons donc nous baser sur tous les clients qui ont passé leur première commande entre le `r debut` et le `r fin`, et nous les observerons jusqu'à aujourd'hui.
+Nous allons donc nous baser sur tous les clients qui ont passé leur première commande entre le `r debut2` et le `r fin2`, et nous les observerons jusqu'à aujourd'hui.
 
 ```{r, echo=FALSE, warning=FALSE}
-breaks_class_cli <- c(1, 2, 6, Inf)
-labels_class_cli <- c("1ère", "2-5ème", "6+")
+
 
 comm <- commandes %>%
-  filter(first_order_date >= debut & first_order_date <= fin) %>%
-  arrange(client_id, order_created_at) %>%
-  group_by(client_id) %>%
-  mutate(nieme = row_number(),
-         nieme_class = cut(nieme, 
-                           breaks = breaks_class_cli,
-                           labels = labels_class_cli,
-                           right = F,
-                           include.lowest = T)) %>%
-  ungroup()
+  filter(first_order_date >= debut2 & first_order_date <= fin2) %>%
+  arrange(client_id, order_created_at) #%>%
+#   group_by(client_id) %>%
+#   mutate(nieme = row_number(),
+#          nieme_class = cut(nieme, 
+#                            breaks = breaks_class_cli,
+#                            labels = labels_class_cli,
+#                            right = F,
+#                            include.lowest = T)) %>%
+#   ungroup()
 ```
 
 Cela nous donne un échantillon de `r n_distinct(comm$client_id)` clients qu'on a observé pendant une période de minimum 3 mois.
 
-Répartition des délais entre 2 commandes
+Répartition des délais (en jours) entre 2 commandes.
 
 ```{r echo=FALSE, warning=FALSE}
 # Délai entre 2 commandes
@@ -538,9 +588,9 @@ ggplot() +
 ```
 
 On voit bien que la grande majorité des commandes sont passées dans des délais inférieurs au seuils qu'on a définis :<br>
-85% des secondes commandes sont passées moins de 45 jours après la première.<br>
-96% des commandes n°3 à 6 sont passées moins de 90 jours après la précédente.<br>
-Presque 100% des commandes n°7+ sont passées moins<br>
+70% des secondes commandes sont passées moins de `r seuil1` jours après la première.<br>
+90% des commandes n°3 à 6 sont passées moins de `r seuil2` jours après la précédente.<br>
+Presque 100% des commandes n°7+ sont passées moins de `r seuil3` jours après la précédente.
 
 Nous pouvons désormais nous servir de des seuils pour déterminer le statut (actif ou non) des clients et calculer leur durée de vie. Ce qui nous sera très utile dans la suite de ce document.
 
@@ -590,13 +640,15 @@ allcli <- commandes %>%
   arrange(client_id, order_created_at) %>% 
   group_by(client_id) %>%
   summarise(orders_count = first(orders_count),
+            orders_count18 = ifelse(min(age > 18),NA,max(nieme[age <= 18])),
             premiere = first(first_order_date),
             derniere = max(order_created_at),
             age_client = round(as.numeric(difftime(aujourdhui, premiere, units = "days"))),
             ddv = round(as.numeric(difftime(derniere, premiere, units = "days"))),
             panier_moyen = mean(gross_sale),
-            # Valeur du client, calculable seulement pour les clients dont on a toutes les commandes : clients arrivés après le 1er mai 18
+            # Valeur du client, calculable seulement pour les clients dont on a toutes les commandes : clients arrivés après le 1er mai 17
             value = ifelse(premiere >= as.Date("2017-05-01"), sum(gross_sale), NA),
+            value18 = ifelse(premiere >= as.Date("2017-05-01"), sum(gross_sale[age <= 18]), NA),
             delai_moyen = mean(delai, na.rm = T),
             delai_moyen_alt = ddv/orders_count,
             pas_vu_depuis = round(as.numeric(difftime(aujourdhui, derniere, units= "days"))),
@@ -605,7 +657,9 @@ allcli <- commandes %>%
                            labels = labels_class_cli,
                            right = F,
                            include.lowest = T),
-            actif = as.integer(pas_vu_depuis <= ifelse(cat == "1ère", seuil1, ifelse(cat == "2-5ème", seuil2, seuil3))))
+            actif = as.integer(pas_vu_depuis <= ifelse(cat == "1ère", seuil1, ifelse(cat == "2-5ème", seuil2, seuil3))),
+            actif18 = ifelse(actif & ddv < 18*30, NA, !(!actif & ddv < 18*30)))
+
 ```
 
 #### Analyse en Composantes Principales
@@ -721,7 +775,7 @@ Sans surprise on constate que la valeur des clients de la classe 4 est nettement
 
 ### Fréquence d'achat
 
-Calculée tous les clients qui ont passé plus d'une commande.
+Calculée sur tous les clients qui ont passé plus d'une commande.
 
 ```{r revenu des classes, include=FALSE}
 df <- allcli %>%
@@ -835,5 +889,228 @@ ggplot(mapping = aes(allcli$panier_moyen)) +
   theme_bw() +
   theme(plot.title = element_text(hjust = 0.5)) +
   coord_cartesian(xlim = c(0,260))
+```
+
+### Customer Lifetime Value prédictive
+
+Pour prédire la valeur totale d'un nouveau client, nous allons d'abord essayer de prédire le nombre de commandes total qu'il va passer. 
+
+Grâce à nos données historiques nous allons calculer la probabilité qu'un client parte après sa Xème commande (et donc sans passer une X+1ème commande).
+Pour cela nous utilisons les mêmes données que précédemment : tous les clients et commandes depuis le 1er mai 2017. <br>
+Ce qui représente un ensemble de `r nrow(allcli)` clients. Mais tous ne vont pas être pris en compte.
+
+```{r df cli, echo=FALSE}
+seuil_com <- 20
+lib_com <- paste0(seuil_com,"-Inf")
+breaks <- c(1:6,9,seuil_com, Inf)
+# breaks <- c(1:seuil_com,Inf)
+
+# Création des labels
+labels <- NA
+for (i in 2:length(breaks)){
+  if(breaks[i] - breaks[i-1] == 1){
+    labels[i-1] <- as.character(breaks[i-1])
+  }else{
+    labels[i-1] <- paste0(breaks[i-1], "-", breaks[i]-1)
+  }
+}
+
+df <- allcli %>%
+  mutate(classe_count = cut(orders_count,
+                            breaks = breaks,
+                            labels = labels,
+                            include.lowest = T, right = F))
+
+t <- table(df$classe_count,df$actif)
+colnames(t) <- c("Non actif", "Actif")
+t
+```
+
+Dans ce tableau on voit le nombre de clients actifs et non actifs selon leur nombre de commandes.
+`r t[1,1]` clients sont donc partis en ayant passé qu'une seule commande et `r t[nrow(t),2]` sont encore actifs après au moins `r seuil_com` commandes.
+
+Pour étudier les départs des clients nous allons nous intéresser essentiellement à la colonne de gauche, celle des clients qui sont partis.
+
+Le groupe des clients partis après avoir passé au moins `r seuil_com` commandes est trop hétérogène pour pouvoir être étudié de la même façon que les autres alors nous allons traiter ce cas à part. Nous allons donc découper l'univers des possibilités ainsi : <br>
+Soit le client nous quitte avant sa `r seuil_com`ème commande ; soit le client atteint le seuil de `r seuil_com` commandes.
+
+On a donc un échantillon composé ainsi :
+
+```{r,echo=FALSE}
+text <- paste("Nombre de clients partis après leurs commandes n°", rownames(t[-nrow(t),]), ": ")
+text <- c(text, paste("Nombre de clients ayant atteint", seuil_com, "commandes : "))
+val <- t[,1]
+val[nrow(t)] <- val[nrow(t)] + t[nrow(t),2]
+
+ech <- data.frame(a = text, b = val)
+rownames(ech) <- NULL
+
+kable(ech, col.names = c("",""))
+```
+
+<br>
+Nous allons calculer la probabilité qu'un client appartienne à chacune de ces catégories.
+
+```{r, echo=FALSE}
+N <- sum(t[,1], last(t[,2]))
+```
+
+<br>
+Nous avons `r N` clients qui entrent dans ce découpage des possibilités, les autres ne sont pas partis et n'ont pas atteint le seuil de `r seuil_com` commandes : donc leur "vie" avec Deligreens n'est pas finie et n'est pas assez longue alors ils ne vont pas être pris en compte dans cette estimation.
+
+Une simple division nous permet alors d'obtenir les probabilités suivantes :
+
+```{r proba, echo=FALSE}
+res <- df %>%
+  filter(!(actif & orders_count < seuil_com)) %>%
+  group_by(classe_count) %>%
+  summarise(probs = n()/N,
+            value_moy = mean(value, na.rm = T)) %>%
+  ungroup() %>%
+  mutate(value_moy = ifelse(classe_count == lib_com, NA, value_moy))
+
+text <- paste("Probabilité qu'un client nous quitte après sa commande n°", rownames(t[-nrow(t),]), ": ")
+text <- c(text, paste("Probabilité qu'un client passe au moins", substr(last(rownames(t)),1,2), "commandes : "))
+
+affich <- data.frame(a = text, b = paste(round(100*res$probs,1),"%"))
+
+kable(affich, col.names = c("",""))
+```
+
+Pour calculer la valeur moyenne d'un client de toutes ces catégories sauf la dernière c'est simple : il nous suffit de prendre la moyenne des valeurs des clients qui les composent.
+
+```{r, echo=FALSE}
+kable(res)
+```
+
+Pour compléter la case manquante on va changer de méthode, ces clients étant encore actifs pour la grande part, on ne connait pas leur valeur effective.
+
+Calculons maintenant la probabilité qu'une commande d'un client ayant atteint `r seuil_com` commandes soit sa dernière. Pour cela on compte toutes les commandes qu'on passé les clients après ce seuil et on regarde parmi ces commandes combien ont été des dernières commandes.
+
+```{r,echo=FALSE}
+nb_com <- df %>%
+  filter(classe_count == lib_com) %>%
+  mutate(nb_com_ap_seuil = orders_count - seuil_com + 1) %>%
+  summarise(nb = sum(nb_com_ap_seuil)) %>%
+  as.integer()
+
+nb_depart <- t[nrow(t),1]
+
+p <- nb_depart/nb_com
+```
+
+Les `r last(val)` clients de la catégorie `r last(names(val))` ont passé un total de `r nb_com` commandes après avoir atteint le seuil de `r seuil_com` commandes. Parmi ces commandes, `r nb_depart` ont été des dernières commandes, qui marquent donc le départ d'un client. En divisant le second par le premier on trouve une probabilité de `r round(100*p,1)` % qu'un clients de cette catégorie nous quitte après chaque commande.
+
+Grâce à cette information on peut estimer à `r round(1/p) + seuil_com - 1` le nombre moyen de commandes que vont passer ces clients avant de nous quitter.
+
+```{r,echo=FALSE}
+panier <- df %>%
+  filter(classe_count == lib_com) %>%
+  summarise(moy = mean(panier_moyen, na.rm = T)) %>%
+  as.numeric()
+value <- panier/p
+```
+
+Et grâce au panier moyen des clients de cette catégorie on peut déduire leur CLV moyenne.
+
+```{r, echo=FALSE}
+res$value_moy[nrow(res)] <- value
+kable(res)
+```
+
+```{r, echo=FALSE}
+clv <- sum(res$probs*res$value_moy)
+```
+
+Enfin, en calculant une moyenne pondérée on trouve une Customer Lifetime Value de `r round(clv,2)` €
+
+## Analyse de survie
+
+```{r, echo=FALSE}
+# dfs <- df
+# dfs$surv_orders <- Surv(dfs$orders_count, !dfs$actif)
+# 
+# km_orders <- survfit(dfs$surv_orders~1)
+# 
+# # survest <- stepfun(km$time, c(1, km$surv))
+# 
+# ggsurvplot(km_orders,
+#            data = dfs,
+#            censor = T,
+#            censor.size = 3,
+#            xlab = "Nombre de commandes",
+#            ylab = "Chances qu'un client soit toujours actif",
+#            break.x.by = 10,
+#            ggtheme = theme_bw(),
+#            risk.table = T,
+#            fontsize = 3.8)
+```
+
+```{r,echo=FALSE}
+dfs <- df
+dfs$surv_ddv <- Surv(round(dfs$ddv/30,1), !dfs$actif)
+
+km_ddv <- survfit(dfs$surv_ddv~1)
+
+# survest <- stepfun(km$time, c(1, km$surv))
+
+ggsurvplot(km_ddv,
+           data = dfs,
+           censor = F,
+           xlab = "Mois",
+           ylab = "Chances de survie",
+           break.x.by = 2,
+           break.y.by = 0.1,
+           ggtheme = theme_bw(),
+           risk.table = T,
+           fontsize = 3.8)
+```
+
+```{r,echo=FALSE}
+delai1 <- function(df, x){
+  return(mean(df$delai[df$nieme >= x], na.rm = T))
+}
+delai2 <- function(df, x){
+  return(mean(df$delai[df$nieme == x], na.rm = T))
+}
+
+x <- 1:20
+y <-sapply(x, delai1, df = comm)
+y2 <- sapply(x, delai2, df = comm)
+
+ggplot() +
+  geom_point(mapping = aes(x = x, y = y)) +
+  geom_point(mapping = aes(x = x, y = y2), color = "red") +
+  theme_bw() +
+  scale_x_continuous(breaks = 1:20) +
+  scale_y_continuous(breaks = seq(0,40,2), limits = c(0,35))
+```
+
+```{r, echo=FALSE}
+# On prend les clients partis ou immortels
+ech <- allcli %>%
+  filter(!actif | orders_count >= 6) %>%
+  select(client_id)
+
+df <- comm %>%
+  filter(client_id %in% ech$client_id & orders_count > 1) %>%
+  group_by(client_id) %>%
+  summarise(delai2 = delai[nieme == 1],
+            orders_count = first(orders_count),
+            panier = gross_sale[nieme == 1]) %>%
+  ungroup()
+
+ggplot(df, aes(x = orders_count, y = delai2)) +
+  geom_hline(yintercept = 30, linetype = "dashed", color = rouge) +
+  geom_vline(xintercept = 5.5, linetype = "dashed", color = rouge) +
+  geom_point(size = 1) +
+  theme_bw() +
+  scale_x_continuous(breaks = seq(0,40,2)) +
+  scale_y_continuous(breaks = seq(0,250,20)) +
+  labs(title = "Délai entre les 2 premières commandes selon le nombre total de commandes",
+       # subtitle = "Pour les clients partis ou ayant atteint 10 commandes",
+       x = "Nombre actuel de commandes",
+       y = "Nombre de jours entre la 1ère et la 2nde commande")
+
 ```
 
